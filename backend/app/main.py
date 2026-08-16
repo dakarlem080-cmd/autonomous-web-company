@@ -1,5 +1,6 @@
 from datetime import datetime,timezone
 from fastapi import FastAPI,Depends
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -7,7 +8,10 @@ from app.db import init_db,Session
 from app.models import Project,Secret,Run,Opportunity
 from app.security import encrypt
 from app.engine import Engine
-app=FastAPI(title="Autonomous Web Company",version="5.0");engine=Engine()
+
+app=FastAPI(title="Autonomous Web Company",version="5.1")
+app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["*"],allow_headers=["*"])
+engine=Engine()
 class ProjectIn(BaseModel):name:str;domain:str;repo:str="";branch:str="main";goal:str="organic_traffic";language:str="en";dry_run:bool=True
 class SecretIn(BaseModel):provider:str;value:str
 @app.on_event("startup")
@@ -15,7 +19,9 @@ async def startup():await init_db()
 async def db():
  async with Session() as s:yield s
 @app.get("/health")
-async def health():return {"status":"ok"}
+async def health():return {"status":"ok","service":"brain-api"}
+@app.get("/")
+async def root():return {"service":"Autonomous Web Company Brain","status":"online","health":"/health"}
 @app.post("/api/projects")
 async def create(p:ProjectIn,s:AsyncSession=Depends(db)):
  x=Project(**p.model_dump());s.add(x);await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"domain":x.domain}
