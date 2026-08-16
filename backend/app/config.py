@@ -1,8 +1,10 @@
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 class Settings(BaseSettings):
     model_config=SettingsConfigDict(env_file=".env",extra="ignore")
     DATABASE_URL:str
+    REDIS_URL:str=""
     OPENAI_API_KEY:str=""
     DEFAULT_MODEL:str="gpt-5.6"
     ENCRYPTION_KEY:str=""
@@ -20,5 +22,6 @@ class Settings(BaseSettings):
     MAX_FILES_CHANGED:int=40
     SCHEDULER_HOURS:int=24
     WORKSPACE_ROOT:str="./workspaces"
+
 @lru_cache
 def settings(): return Settings()
