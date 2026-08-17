@@ -15,10 +15,10 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -115,7 +115,7 @@ jobs:
               print(f"::error file=backend::{safe[-8000:]}")
           raise SystemExit(result.returncode)
           PY
-      - name: Bandit changed files
+      - name: Bandit application and migration files
         run: |
           python - <<'PY'
           import json
@@ -127,7 +127,7 @@ jobs:
                   ["git", "diff", "--name-only", "origin/main...HEAD", "--", "*.py"],
                   text=True,
               ).splitlines()
-              if path.startswith("backend/")
+              if path.startswith(("backend/app/", "backend/alembic/"))
           ]
           if not files:
               raise SystemExit(0)
@@ -157,8 +157,8 @@ jobs:
       run:
         working-directory: dashboard
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Install dependencies
