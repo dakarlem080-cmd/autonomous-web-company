@@ -25,7 +25,7 @@ class GSC:
             credentials = Credentials(
                 token=oauth["access_token"],
                 refresh_token=oauth.get("refresh_token"),
-                token_uri="https://oauth2.googleapis.com/token",  # nosec B105 - OAuth token endpoint, not a credential
+                token_uri="https://oauth2.googleapis.com/token",  # nosec
                 client_id=s.GOOGLE_CLIENT_ID,
                 client_secret=s.GOOGLE_CLIENT_SECRET,
                 scopes=["https://www.googleapis.com/auth/webmasters.readonly"],
@@ -98,7 +98,7 @@ class GA4:
             credentials = Credentials(
                 token=oauth["access_token"],
                 refresh_token=oauth.get("refresh_token"),
-                token_uri="https://oauth2.googleapis.com/token",  # nosec B105 - OAuth token endpoint, not a credential
+                token_uri="https://oauth2.googleapis.com/token",  # nosec
                 client_id=s.GOOGLE_CLIENT_ID,
                 client_secret=s.GOOGLE_CLIENT_SECRET,
                 scopes=["https://www.googleapis.com/auth/analytics.readonly"],
