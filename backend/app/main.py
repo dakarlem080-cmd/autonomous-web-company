@@ -55,6 +55,23 @@ async def secret_map(pid:int,s:AsyncSession):
   except Exception:out[x.provider]=""
  return out
 
+def google_site_for_project(project,configured):
+ site=(configured or "").strip()
+ if site:return site
+ domain=(project.domain or "").strip()
+ if not domain:return ""
+ if domain.startswith("sc-domain:"):return domain
+ if domain.startswith("http://") or domain.startswith("https://"):return domain.rstrip("/")
+ return "https://"+domain.rstrip("/")
+
+def parse_google_oauth(secrets):
+ raw=secrets.get("google_oauth","")
+ if not raw:return None
+ try:
+  value=json.loads(raw)
+  return value if isinstance(value,dict) and value.get("access_token") else None
+ except Exception:return None
+
 @app.get("/api/projects/{pid}/google/oauth/start")
 async def google_oauth_start(pid:int,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
@@ -157,13 +174,23 @@ async def ops(pid:int,s:AsyncSession=Depends(db)):
 async def analytics(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
  if not p:return {"error":"project_not_found"}
- gsc=GSC();gsc_rows=gsc.query(["query","page"]);impressions=clicks=0.0;opportunities=[]
+ from app.config import settings
+ cfg=settings();stored=await secret_map(pid,s);oauth=parse_google_oauth(stored)
+ site=google_site_for_project(p,cfg.GSC_SITE_URL)
+ gsc=GSC(oauth=oauth,site=site)
+ gsc_rows=[];gsc_error=""
+ try:gsc_rows=gsc.query(["query","page"])
+ except Exception as e:gsc_error=str(e)[:300]
+ impressions=clicks=0.0;opportunities=[]
  for row in gsc_rows:
   imp=float(row.get("impressions",0));clk=float(row.get("clicks",0));impressions+=imp;clicks+=clk;keys=row.get("keys",[])
   if imp>0:opportunities.append({"query":keys[0] if keys else "","page":keys[1] if len(keys)>1 else "","clicks":clk,"impressions":imp,"ctr":float(row.get("ctr",0))*100,"position":float(row.get("position",0))})
  opportunities.sort(key=lambda x:(x["impressions"],-x["position"]),reverse=True)
- ga4=GA4();ga4_rows=ga4.report();users=sessions=engagement_weight=0.0
+ ga4=GA4(oauth=oauth);ga4_rows=[];ga4_error=""
+ try:ga4_rows=ga4.report()
+ except Exception as e:ga4_error=str(e)[:300]
+ users=sessions=engagement_weight=0.0
  for row in ga4_rows:
   vals=[float(v.value or 0) for v in row.metric_values];u=vals[0] if len(vals)>0 else 0;sess=vals[1] if len(vals)>1 else 0;eng=vals[2] if len(vals)>2 else 0;users+=u;sessions+=sess;engagement_weight+=eng*sess
  engagement=(engagement_weight/sessions*100) if sessions else 0
- return {"project":{"id":p.id,"name":p.name,"domain":p.domain},"gsc":{"configured":bool(gsc.service),"clicks":round(clicks),"impressions":round(impressions),"ctr":round(clicks/impressions*100,2) if impressions else 0,"opportunities":opportunities[:20]},"ga4":{"configured":bool(ga4.client),"users":round(users),"sessions":round(sessions),"engagement_rate":round(engagement,2)},"period_days":28}
+ return {"project":{"id":p.id,"name":p.name,"domain":p.domain},"google":{"oauth_connected":bool(oauth),"encrypted_storage":("google_oauth" in stored),"site":site,"ga4_property_configured":bool(cfg.GA4_PROPERTY_ID)},"gsc":{"configured":bool(gsc.service and site),"clicks":round(clicks),"impressions":round(impressions),"ctr":round(clicks/impressions*100,2) if impressions else 0,"opportunities":opportunities[:20],"error":gsc_error},"ga4":{"configured":bool(ga4.client and ga4.pid),"users":round(users),"sessions":round(sessions),"engagement_rate":round(engagement,2),"error":ga4_error},"period_days":28}
