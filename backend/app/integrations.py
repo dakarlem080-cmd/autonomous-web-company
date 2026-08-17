@@ -1,6 +1,7 @@
 from datetime import date,timedelta
 import json,httpx
-from google.oauth2 import service_account,Credentials
+from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import DateRange,Dimension,Metric,RunReportRequest
