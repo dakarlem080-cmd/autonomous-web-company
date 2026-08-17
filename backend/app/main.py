@@ -5,56 +5,75 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.db import init_db,Session
-from app.models import Project,Secret,Run,Opportunity
+from app.models import Project,Secret,Run,Opportunity,Employee,AIModel
 from app.security import encrypt
 from app.engine import Engine
 from app.integrations import GSC,GA4,GitHub,Vercel
 
-app=FastAPI(title="Autonomous Web Company",version="5.3")
+app=FastAPI(title="Autonomous Web Company",version="5.4")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["*"],allow_headers=["*"])
 engine=Engine()
 class ProjectIn(BaseModel):name:str;domain:str;repo:str="";branch:str="main";goal:str="organic_traffic";language:str="en";dry_run:bool=True
 class SecretIn(BaseModel):provider:str;value:str
+class EmployeeIn(BaseModel):name:str;role:str;agent:str=""
+class ModelIn(BaseModel):provider:str;model:str;purpose:str="general"
 
 @app.on_event("startup")
 async def startup():await init_db()
-
 async def db():
  async with Session() as s:yield s
-
 @app.get("/health")
 async def health():return {"status":"ok","service":"brain-api"}
-
 @app.get("/")
 async def root():return {"service":"Autonomous Web Company Brain","status":"online","health":"/health"}
-
 @app.get("/api/status")
 async def status():
  from app.config import settings
  s=settings();return {"status":"online","dry_run":s.AUTONOMY_DRY_RUN,"provisioning_enabled":s.PROVISIONING_ENABLED,"integrations":{"gsc":bool(s.GOOGLE_APPLICATION_CREDENTIALS and s.GSC_SITE_URL),"ga4":bool(s.GA4_PROPERTY_ID),"github":bool(s.GITHUB_TOKEN and s.GITHUB_OWNER),"vercel":bool(s.VERCEL_TOKEN),"domain_binding":bool(s.VERCEL_TOKEN and s.ALLOW_DOMAIN_BINDING)},"scheduler_hours":s.SCHEDULER_HOURS}
-
 @app.post("/api/projects")
 async def create(p:ProjectIn,s:AsyncSession=Depends(db)):
  x=Project(**p.model_dump());s.add(x);await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"domain":x.domain,"dry_run":x.dry_run}
-
 @app.get("/api/projects")
 async def projects(s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).order_by(Project.id.desc()));return [{"id":x.id,"name":x.name,"domain":x.domain,"dry_run":x.dry_run,"active":x.active} for x in r.scalars()]
-
 @app.post("/api/projects/{pid}/secrets")
 async def secret(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid))
  if not r.scalar_one_or_none():raise HTTPException(404,"project_not_found")
  s.add(Secret(project_id=pid,provider=p.provider,ciphertext=encrypt(p.value)));await s.commit();return {"status":"stored"}
-
+@app.get("/api/projects/{pid}/settings")
+async def project_settings(pid:int,s:AsyncSession=Depends(db)):
+ r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
+ if not p:raise HTTPException(404,"project_not_found")
+ er=await s.execute(select(Employee).where(Employee.project_id==pid));mr=await s.execute(select(AIModel).where(AIModel.project_id==pid));sr=await s.execute(select(Secret).where(Secret.project_id==pid))
+ from app.config import settings
+ cfg=settings()
+ return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"dry_run":p.dry_run},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"active":x.active} for x in er.scalars()],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in mr.scalars()],"connections":{"github":bool(cfg.GITHUB_TOKEN and cfg.GITHUB_OWNER),"vercel":bool(cfg.VERCEL_TOKEN),"gsc":bool(cfg.GOOGLE_APPLICATION_CREDENTIALS and cfg.GSC_SITE_URL),"ga4":bool(cfg.GA4_PROPERTY_ID),"secrets":[x.provider for x in sr.scalars()]}}
+@app.post("/api/projects/{pid}/employees")
+async def add_employee(pid:int,p:EmployeeIn,s:AsyncSession=Depends(db)):
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+ x=Employee(project_id=pid,**p.model_dump());s.add(x);await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"active":x.active}
+@app.delete("/api/projects/{pid}/employees/{eid}")
+async def remove_employee(pid:int,eid:int,s:AsyncSession=Depends(db)):
+ x=await s.scalar(select(Employee).where(Employee.id==eid,Employee.project_id==pid))
+ if not x:raise HTTPException(404,"employee_not_found")
+ await s.delete(x);await s.commit();return {"status":"removed"}
+@app.post("/api/projects/{pid}/models")
+async def add_model(pid:int,p:ModelIn,s:AsyncSession=Depends(db)):
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+ x=AIModel(project_id=pid,**p.model_dump());s.add(x);await s.commit();await s.refresh(x);return {"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active}
+@app.delete("/api/projects/{pid}/models/{mid}")
+async def remove_model(pid:int,mid:int,s:AsyncSession=Depends(db)):
+ x=await s.scalar(select(AIModel).where(AIModel.id==mid,AIModel.project_id==pid))
+ if not x:raise HTTPException(404,"model_not_found")
+ await s.delete(x);await s.commit();return {"status":"removed"}
 @app.post("/api/projects/{pid}/provision")
 async def provision(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
  if not p:raise HTTPException(404,"project_not_found")
  from app.config import settings
- if settings().AUTONOMY_DRY_RUN:return {"status":"blocked","reason":"global_dry_run_enabled","next":"Set AUTONOMY_DRY_RUN=false after credentials and safeguards are verified."}
+ if settings().AUTONOMY_DRY_RUN:return {"status":"blocked","reason":"global_dry_run_enabled"}
  return engine.provision(p)
-
 @app.post("/api/projects/{pid}/run")
 async def run(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
@@ -63,15 +82,12 @@ async def run(pid:int,s:AsyncSession=Depends(db)):
  try:x.state=engine.cycle(p);x.status="cycle_complete"
  except Exception as e:x.status="failed";x.error=str(e);x.state={"error":str(e)}
  x.finished_at=datetime.now(timezone.utc);await s.commit();return x.state
-
 @app.get("/api/projects/{pid}/runs")
 async def runs(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Run).where(Run.project_id==pid).order_by(Run.id.desc()).limit(50));return [{"id":x.id,"status":x.status,"error":x.error,"finished_at":x.finished_at.isoformat() if x.finished_at else None} for x in r.scalars()]
-
 @app.get("/api/projects/{pid}/opportunities")
 async def ops(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Opportunity).where(Opportunity.project_id==pid).order_by(Opportunity.score.desc()));return [{"id":x.id,"title":x.title,"score":x.score,"status":x.status} for x in r.scalars()]
-
 @app.get("/api/projects/{pid}/analytics")
 async def analytics(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
