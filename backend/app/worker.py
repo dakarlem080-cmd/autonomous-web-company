@@ -14,7 +14,7 @@ from app.queue import reserve,retry
 async def execute_project(p,run_id:int,e:Engine,runtime:AgentRuntime):
     async with Session() as db:
         stored=secret_map(p.id,db);oauth=stored.get("google_oauth") if isinstance(stored.get("google_oauth"),dict) else {};site=google_site_for_project(p,settings().GSC_SITE_URL);agents=await runtime.load(db,p.id)
-    state=await asyncio.to_thread(e.cycle,p,oauth,site,None,agents)
+    state=await asyncio.to_thread(e.cycle,p,oauth,site,None,agents,stored)
     async with Session() as db:
         run=await db.scalar(select(Run).where(Run.id==run_id));run.state=state;run.status="cycle_complete";run.finished_at=datetime.now(timezone.utc);await db.commit()
 
