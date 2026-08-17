@@ -7,11 +7,16 @@ from app.config import settings
 GOOGLE_AUTH_URL="https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL="https://oauth2.googleapis.com/token"
 SCOPES="https://www.googleapis.com/auth/webmasters.readonly https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/adwords https://www.googleapis.com/auth/adsense.readonly"
+DEFAULT_REDIRECT_URI="https://autonomous-web-company-production.up.railway.app/api/google/oauth/callback"
 def _env(name:str)->str:
  value=(os.environ.get(name) or "").strip()
  if value:return value
  try:return str(getattr(settings(),name,"") or "").strip()
  except Exception:return ""
+def _redirect_uri()->str:
+ value=_env("GOOGLE_OAUTH_REDIRECT_URI")
+ if not value or "/api/projects/" in value:return DEFAULT_REDIRECT_URI
+ return value
 def _state_key()->bytes:
  value=_env("GOOGLE_OAUTH_STATE_SECRET") or _env("ENCRYPTION_KEY") or _env("GOOGLE_CLIENT_SECRET")
  if not value:raise RuntimeError("Google OAuth state secret is not configured")
@@ -29,14 +34,14 @@ def read_state(state:str):
   return payload
  except Exception as exc:raise ValueError("invalid_state") from exc
 def authorization_url(project_id:int):
- client_id=_env("GOOGLE_CLIENT_ID");redirect_uri=_env("GOOGLE_OAUTH_REDIRECT_URI");client_secret=_env("GOOGLE_CLIENT_SECRET")
- missing=[k for k,v in (("GOOGLE_CLIENT_ID",client_id),("GOOGLE_OAUTH_REDIRECT_URI",redirect_uri),("GOOGLE_CLIENT_SECRET",client_secret)) if not v]
+ client_id=_env("GOOGLE_CLIENT_ID");redirect_uri=_redirect_uri();client_secret=_env("GOOGLE_CLIENT_SECRET")
+ missing=[k for k,v in (("GOOGLE_CLIENT_ID",client_id),("GOOGLE_CLIENT_SECRET",client_secret)) if not v]
  if missing:raise RuntimeError("Google OAuth is not configured: "+", ".join(missing))
  params={"client_id":client_id,"redirect_uri":redirect_uri,"response_type":"code","scope":SCOPES,"access_type":"offline","include_granted_scopes":"true","prompt":"consent","state":make_state(project_id)}
  return GOOGLE_AUTH_URL+"?"+urlencode(params)
 async def exchange_code(code:str):
- client_id=_env("GOOGLE_CLIENT_ID");client_secret=_env("GOOGLE_CLIENT_SECRET");redirect_uri=_env("GOOGLE_OAUTH_REDIRECT_URI")
- missing=[k for k,v in (("GOOGLE_CLIENT_ID",client_id),("GOOGLE_CLIENT_SECRET",client_secret),("GOOGLE_OAUTH_REDIRECT_URI",redirect_uri)) if not v]
+ client_id=_env("GOOGLE_CLIENT_ID");client_secret=_env("GOOGLE_CLIENT_SECRET");redirect_uri=_redirect_uri()
+ missing=[k for k,v in (("GOOGLE_CLIENT_ID",client_id),("GOOGLE_CLIENT_SECRET",client_secret)) if not v]
  if missing:raise RuntimeError("Google OAuth is not configured: "+", ".join(missing))
  async with httpx.AsyncClient(timeout=30) as client:
   response=await client.post(GOOGLE_TOKEN_URL,data={"code":code,"client_id":client_id,"client_secret":client_secret,"redirect_uri":redirect_uri,"grant_type":"authorization_code"})
