@@ -9,27 +9,27 @@ from github import Github
 from app.config import settings
 
 class GSC:
-    def __init__(self,oauth=None):
-        s=settings();self.site=s.GSC_SITE_URL;self.service=None
+    def __init__(self,oauth=None,site=None):
+        s=settings();self.site=site or s.GSC_SITE_URL;self.service=None
         if oauth and oauth.get("access_token"):
             c=Credentials(token=oauth["access_token"],refresh_token=oauth.get("refresh_token"),token_uri="https://oauth2.googleapis.com/token",client_id=s.GOOGLE_CLIENT_ID,client_secret=s.GOOGLE_CLIENT_SECRET,scopes=["https://www.googleapis.com/auth/webmasters.readonly"])
-            self.service=build("searchconsole","v1",credentials=c)
+            self.service=build("searchconsole","v1",credentials=c,cache_discovery=False)
         elif s.GOOGLE_APPLICATION_CREDENTIALS and self.site:
-            c=service_account.Credentials.from_service_account_file(s.GOOGLE_APPLICATION_CREDENTIALS,scopes=["https://www.googleapis.com/auth/webmasters.readonly"]);self.service=build("searchconsole","v1",credentials=c)
+            c=service_account.Credentials.from_service_account_file(s.GOOGLE_APPLICATION_CREDENTIALS,scopes=["https://www.googleapis.com/auth/webmasters.readonly"]);self.service=build("searchconsole","v1",credentials=c,cache_discovery=False)
     def query(self,dimensions,days=28):
         if not self.service or not self.site:return []
         e=date.today()-timedelta(days=2);st=e-timedelta(days=days)
         return self.service.searchanalytics().query(siteUrl=self.site,body={"startDate":st.isoformat(),"endDate":e.isoformat(),"dimensions":dimensions,"rowLimit":25000,"dataState":"final"}).execute().get("rows",[])
 
 class GA4:
-    def __init__(self,oauth=None):
-        s=settings();self.pid=s.GA4_PROPERTY_ID;self.client=None
+    def __init__(self,oauth=None,property_id=None):
+        s=settings();self.pid=property_id or s.GA4_PROPERTY_ID;self.client=None
         if oauth and oauth.get("access_token"):
             c=Credentials(token=oauth["access_token"],refresh_token=oauth.get("refresh_token"),token_uri="https://oauth2.googleapis.com/token",client_id=s.GOOGLE_CLIENT_ID,client_secret=s.GOOGLE_CLIENT_SECRET,scopes=["https://www.googleapis.com/auth/analytics.readonly"]);self.client=BetaAnalyticsDataClient(credentials=c)
         elif self.pid:self.client=BetaAnalyticsDataClient()
-    def report(self):
+    def report(self,days=28):
         if not self.client or not self.pid:return []
-        e=date.today();st=e-timedelta(days=28)
+        e=date.today();st=e-timedelta(days=days)
         q=RunReportRequest(property=f"properties/{self.pid}",date_ranges=[DateRange(start_date=st.isoformat(),end_date=e.isoformat())],dimensions=[Dimension(name="date")],metrics=[Metric(name="activeUsers"),Metric(name="sessions"),Metric(name="engagementRate")]);return self.client.run_report(q).rows
 
 class GitHub:
