@@ -11,6 +11,7 @@ from app.security import encrypt,decrypt
 from app.engine import Engine
 from app.integrations import GSC,GA4,GitHub,Vercel
 from app.google_oauth import authorization_url,exchange_code,read_state
+from app.github_oauth import authorization_url as github_authorization_url,exchange_code as github_exchange_code,read_state as github_read_state,profile as github_profile,repositories as github_repositories
 from app.adsense import AdSense
 import json
 app=FastAPI(title="Autonomous Web Company",version="5.6")
@@ -55,8 +56,7 @@ async def project_settings(pid:int,s:AsyncSession=Depends(db)):
  employees=(await s.execute(select(Employee).where(Employee.project_id==pid).order_by(Employee.id))).scalars().all()
  models=(await s.execute(select(AIModel).where(AIModel.project_id==pid).order_by(AIModel.id))).scalars().all()
  from app.config import settings
- cfg=settings();google_connected="google_oauth" in providers
- github_connected=bool(cfg.GITHUB_TOKEN and cfg.GITHUB_OWNER);vercel_connected=bool(cfg.VERCEL_TOKEN)
+ cfg=settings();google_connected="google_oauth" in providers;github_connected="github_oauth" in providers;vercel_connected=bool(cfg.VERCEL_TOKEN)
  return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"repo":p.repo,"branch":p.branch,"goal":p.goal,"language":p.language,"dry_run":p.dry_run,"active":p.active},"connections":{"google":{"connected":google_connected,"search_console":google_connected,"analytics":google_connected,"adsense":google_connected},"google_oauth":google_connected,"gsc":google_connected,"ga4":google_connected,"adsense":google_connected,"github":github_connected,"vercel":vercel_connected},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"instructions":x.instructions,"objectives":x.objectives or [],"tools":x.tools or [],"permissions":x.permissions or [],"model_id":x.model_id,"autonomy_level":x.autonomy_level,"active":x.active} for x in employees],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in models]}
 @app.post("/api/projects/{pid}/secrets")
 async def secret(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
@@ -134,6 +134,48 @@ async def google_oauth_callback(code:str|None=None,state:str|None=None,error:str
  except Exception:
   await s.rollback()
   return RedirectResponse(f"{dashboard}/settings?tab=google&google=error",status_code=302)
+@app.get("/api/projects/{pid}/github/oauth/start")
+async def github_oauth_start(pid:int,s:AsyncSession=Depends(db)):
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+ try:return RedirectResponse(github_authorization_url(pid),status_code=302)
+ except ValueError as e:raise HTTPException(503,detail=str(e))
+ except Exception as e:raise HTTPException(500,detail=f"github_oauth_start_failed:{e}")
+@app.get("/api/github/oauth/callback")
+async def github_oauth_callback(code:str|None=None,state:str|None=None,error:str|None=None,s:AsyncSession=Depends(db)):
+ from app.config import settings
+ dashboard=settings().DASHBOARD_URL.rstrip("/")
+ if error:return RedirectResponse(f"{dashboard}/settings?tab=github&github=denied",status_code=302)
+ if not code or not state:return RedirectResponse(f"{dashboard}/settings?tab=github&github=error",status_code=302)
+ try:
+  payload=github_read_state(state);pid=int(payload.get("pid"))
+  if not await s.scalar(select(Project).where(Project.id==pid)):raise ValueError("project_not_found")
+  token=await github_exchange_code(code);access=token.get("access_token")
+  if not access:raise ValueError("github_access_token_missing")
+  me=await github_profile(access)
+  value=json.dumps({"token":token,"profile":me},separators=(",",":"))
+  old=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider=="github_oauth"))
+  if old:old.ciphertext=encrypt(value)
+  else:s.add(Secret(project_id=pid,provider="github_oauth",ciphertext=encrypt(value)))
+  await s.commit()
+  return RedirectResponse(f"{dashboard}/settings?tab=github&github=connected",status_code=302)
+ except Exception:
+  await s.rollback()
+  return RedirectResponse(f"{dashboard}/settings?tab=github&github=error",status_code=302)
+@app.get("/api/projects/{pid}/github")
+async def github_connection(pid:int,s:AsyncSession=Depends(db)):
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+ stored=await secret_map(pid,s);data=stored.get("github_oauth") or {}
+ token=data.get("token",{}).get("access_token") if isinstance(data,dict) else None
+ if not token:return {"connected":False}
+ me=data.get("profile",{}) if isinstance(data,dict) else {}
+ try:repos=await github_repositories(token,100)
+ except Exception as e:return {"connected":True,"profile":me,"repositories":[],"error":str(e)[:300]}
+ return {"connected":True,"profile":me,"repositories":repos if isinstance(repos,list) else []}
+@app.delete("/api/projects/{pid}/github")
+async def github_disconnect(pid:int,s:AsyncSession=Depends(db)):
+ x=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider=="github_oauth"))
+ if x:await s.delete(x);await s.commit()
+ return {"connected":False}
 @app.get("/api/projects/{pid}/adsense")
 async def adsense(pid:int,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
