@@ -12,18 +12,16 @@ from app.engine import Engine
 from app.integrations import GSC,GA4,GitHub,Vercel
 from app.google_oauth import authorization_url,exchange_code,read_state
 import json
-
 app=FastAPI(title="Autonomous Web Company",version="5.6")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["*"],allow_headers=["*"])
 engine=Engine()
 class ProjectIn(BaseModel):name:str;domain:str;repo:str="";branch:str="main";goal:str="organic_traffic";language:str="en";dry_run:bool=True
 class ProjectPatch(BaseModel):name:str|None=None;domain:str|None=None;repo:str|None=None;branch:str|None=None;goal:str|None=None;language:str|None=None;dry_run:bool|None=None;active:bool|None=None
 class SecretIn(BaseModel):provider:str;value:str
-class EmployeeIn(BaseModel):name:str;role:str;agent:str=""
-class EmployeePatch(BaseModel):name:str|None=None;role:str|None=None;agent:str|None=None;active:bool|None=None
+class EmployeeIn(BaseModel):name:str;role:str;agent:str="";instructions:str="";objectives:list[str]=[];tools:list[str]=[];permissions:list[str]=[];model_id:int|None=None;autonomy_level:str="execute"
+class EmployeePatch(BaseModel):name:str|None=None;role:str|None=None;agent:str|None=None;instructions:str|None=None;objectives:list[str]|None=None;tools:list[str]|None=None;permissions:list[str]|None=None;model_id:int|None=None;autonomy_level:str|None=None;active:bool|None=None
 class ModelIn(BaseModel):provider:str;model:str;purpose:str="general"
 class ModelPatch(BaseModel):provider:str|None=None;model:str|None=None;purpose:str|None=None;active:bool|None=None
-
 @app.on_event("startup")
 async def startup():await init_db()
 async def db():
@@ -50,108 +48,35 @@ async def update_project(pid:int,p:ProjectPatch,s:AsyncSession=Depends(db)):
  await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"domain":x.domain,"repo":x.repo,"branch":x.branch,"goal":x.goal,"language":x.language,"dry_run":x.dry_run,"active":x.active}
 @app.post("/api/projects/{pid}/secrets")
 async def secret(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
- r=await s.execute(select(Project).where(Project.id==pid))
- if not r.scalar_one_or_none():raise HTTPException(404,"project_not_found")
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
  old=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider==p.provider))
  if old:old.ciphertext=encrypt(p.value)
  else:s.add(Secret(project_id=pid,provider=p.provider,ciphertext=encrypt(p.value)))
  await s.commit();return {"status":"stored","provider":p.provider}
-
-async def secret_map(pid:int,s:AsyncSession):
- r=await s.execute(select(Secret).where(Secret.project_id==pid));out={}
- for x in r.scalars():
-  try:out[x.provider]=decrypt(x.ciphertext)
-  except Exception:out[x.provider]=""
- return out
-
-def google_site_for_project(project,configured):
- site=(configured or "").strip()
- if site:return site
- domain=(project.domain or "").strip()
- if not domain:return ""
- if domain.startswith("sc-domain:"):return domain
- if domain.startswith("http://") or domain.startswith("https://"):return domain.rstrip("/")
- return "https://"+domain.rstrip("/")
-
-def parse_google_oauth(secrets):
- raw=secrets.get("google_oauth","")
- if not raw:return None
- try:
-  value=json.loads(raw);return value if isinstance(value,dict) and value.get("access_token") else None
- except Exception:return None
-
-@app.get("/api/projects/{pid}/google/oauth/start")
-async def google_oauth_start(pid:int,s:AsyncSession=Depends(db)):
- if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
- try:return RedirectResponse(authorization_url(pid),status_code=302)
- except RuntimeError as e:raise HTTPException(503,str(e))
-@app.get("/api/google/oauth/callback")
-async def google_oauth_callback(code:str|None=None,state:str|None=None,error:str|None=None,s:AsyncSession=Depends(db)):
- from app.config import settings
- if error:return RedirectResponse(f"{settings().DASHBOARD_URL}/settings?tab=google&google=denied")
- if not code or not state:raise HTTPException(400,"missing_oauth_response")
- try:payload=read_state(state);pid=int(payload["pid"])
- except Exception:raise HTTPException(400,"invalid_oauth_state")
- if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
- try:tokens=await exchange_code(code)
- except Exception as e:return RedirectResponse(f"{settings().DASHBOARD_URL}/settings?tab=google&google=error&detail={str(e)[:80]}")
- bundle={"access_token":tokens.get("access_token",""),"refresh_token":tokens.get("refresh_token",""),"expires_in":tokens.get("expires_in",0),"scope":tokens.get("scope","")};old=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider=="google_oauth"));value=json.dumps(bundle)
- if old:old.ciphertext=encrypt(value)
- else:s.add(Secret(project_id=pid,provider="google_oauth",ciphertext=encrypt(value)))
- await s.commit();return RedirectResponse(f"{settings().DASHBOARD_URL}/settings?tab=google&google=connected")
-@app.post("/api/projects/{pid}/connections/test")
-async def test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
- if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
- value=p.value.strip()
- try:
-  if p.provider=="github_token":
-   from github import Github
-   user=Github(value).get_user();return {"provider":"github","connected":True,"account":user.login}
-  if p.provider=="vercel_token":
-   import httpx
-   r=httpx.get("https://api.vercel.com/v2/user",headers={"Authorization":f"Bearer {value}"},timeout=20);r.raise_for_status();return {"provider":"vercel","connected":True,"account":r.json().get("user",{}).get("username")}
-  if p.provider in {"gsc_service_account","ga4_service_account"}:
-   from google.oauth2 import service_account
-   scopes=["https://www.googleapis.com/auth/webmasters.readonly"] if p.provider=="gsc_service_account" else ["https://www.googleapis.com/auth/analytics.readonly"];info=json.loads(value);creds=service_account.Credentials.from_service_account_info(info,scopes=scopes);return {"provider":p.provider,"connected":True,"account":creds.service_account_email}
-  raise HTTPException(400,"unsupported_provider")
- except HTTPException:raise
- except Exception as e:return {"provider":p.provider,"connected":False,"error":str(e)[:300]}
-@app.post("/api/projects/{pid}/connections/save-and-test")
-async def save_and_test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
- result=await test_connection(pid,p,s)
- if result.get("connected"):await secret(pid,p,s)
- return result
-
-@app.get("/api/projects/{pid}/settings")
-async def project_settings(pid:int,s:AsyncSession=Depends(db)):
- r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
- if not p:raise HTTPException(404,"project_not_found")
- er=await s.execute(select(Employee).where(Employee.project_id==pid));mr=await s.execute(select(AIModel).where(AIModel.project_id==pid));sr=await s.execute(select(Secret).where(Secret.project_id==pid))
- from app.config import settings
- cfg=settings();providers=[x.provider for x in sr.scalars()]
- return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"repo":p.repo,"branch":p.branch,"goal":p.goal,"language":p.language,"dry_run":p.dry_run,"active":p.active},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"active":x.active} for x in er.scalars()],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in mr.scalars()],"connections":{"github":bool(cfg.GITHUB_TOKEN and cfg.GITHUB_OWNER),"vercel":bool(cfg.VERCEL_TOKEN),"gsc":bool(cfg.GOOGLE_APPLICATION_CREDENTIALS and cfg.GSC_SITE_URL) or "google_oauth" in providers,"ga4":bool(cfg.GA4_PROPERTY_ID) or "google_oauth" in providers,"google_oauth":"google_oauth" in providers,"secrets":providers}}
-@app.get("/api/projects/{pid}/autonomy")
-async def autonomy_state(pid:int,s:AsyncSession=Depends(db)):
- p=await s.scalar(select(Project).where(Project.id==pid))
- if not p:raise HTTPException(404,"project_not_found")
- r=await s.execute(select(Run).where(Run.project_id==pid).order_by(Run.id.desc()).limit(1));run=r.scalar_one_or_none();state=run.state if run and isinstance(run.state,dict) else {}
- return {"project_id":pid,"status":run.status if run else "idle","last_run_id":run.id if run else None,"release":state.get("release",{}),"autonomy":state.get("autonomy",{}),"provisioning":state.get("provisioning",{}),"error":run.error if run else None}
-
+@app.get("/api/projects/{pid}/employees")
+async def employees(pid:int,s:AsyncSession=Depends(db)):
+ r=await s.execute(select(Employee).where(Employee.project_id==pid).order_by(Employee.id));return [{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"instructions":x.instructions,"objectives":x.objectives or [],"tools":x.tools or [],"permissions":x.permissions or [],"model_id":x.model_id,"autonomy_level":x.autonomy_level,"active":x.active} for x in r.scalars()]
 @app.post("/api/projects/{pid}/employees")
 async def add_employee(pid:int,p:EmployeeIn,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
- x=Employee(project_id=pid,**p.model_dump());s.add(x);await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"active":x.active}
+ if p.model_id and not await s.scalar(select(AIModel).where(AIModel.id==p.model_id,AIModel.project_id==pid)):raise HTTPException(400,"model_not_found")
+ x=Employee(project_id=pid,**p.model_dump());s.add(x);await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"model_id":x.model_id,"active":x.active}
 @app.patch("/api/projects/{pid}/employees/{eid}")
 async def update_employee(pid:int,eid:int,p:EmployeePatch,s:AsyncSession=Depends(db)):
  x=await s.scalar(select(Employee).where(Employee.id==eid,Employee.project_id==pid))
  if not x:raise HTTPException(404,"employee_not_found")
- for k,v in p.model_dump(exclude_unset=True).items():setattr(x,k,v)
- await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"active":x.active}
+ data=p.model_dump(exclude_unset=True)
+ if "model_id" in data and data["model_id"] and not await s.scalar(select(AIModel).where(AIModel.id==data["model_id"],AIModel.project_id==pid)):raise HTTPException(400,"model_not_found")
+ for k,v in data.items():setattr(x,k,v)
+ await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"instructions":x.instructions,"objectives":x.objectives or [],"tools":x.tools or [],"permissions":x.permissions or [],"model_id":x.model_id,"autonomy_level":x.autonomy_level,"active":x.active}
 @app.delete("/api/projects/{pid}/employees/{eid}")
 async def remove_employee(pid:int,eid:int,s:AsyncSession=Depends(db)):
  x=await s.scalar(select(Employee).where(Employee.id==eid,Employee.project_id==pid))
  if not x:raise HTTPException(404,"employee_not_found")
  await s.delete(x);await s.commit();return {"status":"removed"}
+@app.get("/api/projects/{pid}/models")
+async def models(pid:int,s:AsyncSession=Depends(db)):
+ r=await s.execute(select(AIModel).where(AIModel.project_id==pid).order_by(AIModel.id));return [{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in r.scalars()]
 @app.post("/api/projects/{pid}/models")
 async def add_model(pid:int,p:ModelIn,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
@@ -167,16 +92,20 @@ async def remove_model(pid:int,mid:int,s:AsyncSession=Depends(db)):
  x=await s.scalar(select(AIModel).where(AIModel.id==mid,AIModel.project_id==pid))
  if not x:raise HTTPException(404,"model_not_found")
  await s.delete(x);await s.commit();return {"status":"removed"}
+@app.get("/api/projects/{pid}/autonomy")
+async def autonomy(pid:int,s:AsyncSession=Depends(db)):
+ run=await s.scalar(select(Run).where(Run.project_id==pid).order_by(Run.id.desc()).limit(1));emps=(await s.execute(select(Employee).where(Employee.project_id==pid,Employee.active==True))).scalars().all()
+ return {"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"model_id":x.model_id,"autonomy_level":x.autonomy_level} for x in emps],"latest_run":{"id":run.id,"status":run.status,"state":run.state} if run else None}
 @app.post("/api/projects/{pid}/provision")
 async def provision(pid:int,s:AsyncSession=Depends(db)):
- r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
+ p=await s.scalar(select(Project).where(Project.id==pid))
  if not p:raise HTTPException(404,"project_not_found")
  from app.config import settings
  if settings().AUTONOMY_DRY_RUN:return {"status":"blocked","reason":"global_dry_run_enabled"}
  return engine.provision(p)
 @app.post("/api/projects/{pid}/run")
 async def run(pid:int,s:AsyncSession=Depends(db)):
- r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
+ p=await s.scalar(select(Project).where(Project.id==pid))
  if not p:return {"error":"project_not_found"}
  x=Run(project_id=pid,status="running");s.add(x);await s.commit()
  try:x.state=engine.cycle(p);x.status="cycle_complete"
@@ -190,7 +119,7 @@ async def ops(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Opportunity).where(Opportunity.project_id==pid).order_by(Opportunity.score.desc()));return [{"id":x.id,"title":x.title,"score":x.score,"status":x.status} for x in r.scalars()]
 @app.get("/api/projects/{pid}/analytics")
 async def analytics(pid:int,s:AsyncSession=Depends(db)):
- r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
+ p=await s.scalar(select(Project).where(Project.id==pid))
  if not p:return {"error":"project_not_found"}
  from app.config import settings
  cfg=settings();stored=await secret_map(pid,s);oauth=parse_google_oauth(stored);site=google_site_for_project(p,cfg.GSC_SITE_URL);gsc=GSC(oauth=oauth,site=site);gsc_rows=[];gsc_error="";gsc_connected=False
