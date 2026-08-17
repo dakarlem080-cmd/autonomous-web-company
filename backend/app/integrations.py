@@ -20,6 +20,13 @@ class GSC:
         if not self.service or not self.site:return []
         e=date.today()-timedelta(days=2);st=e-timedelta(days=days)
         return self.service.searchanalytics().query(siteUrl=self.site,body={"startDate":st.isoformat(),"endDate":e.isoformat(),"dimensions":dimensions,"rowLimit":25000,"dataState":"final"}).execute().get("rows",[])
+    def test(self):
+        if not self.service:return {"connected":False,"reason":"oauth_not_configured"}
+        if not self.site:return {"connected":False,"reason":"site_not_configured"}
+        try:
+            response=self.service.sites().get(siteUrl=self.site).execute()
+            return {"connected":True,"site":self.site,"permission_level":response.get("permissionLevel")}
+        except Exception as e:return {"connected":False,"site":self.site,"reason":str(e)[:300]}
 
 class GA4:
     def __init__(self,oauth=None,property_id=None):
@@ -31,12 +38,27 @@ class GA4:
         if not self.client or not self.pid:return []
         e=date.today();st=e-timedelta(days=days)
         q=RunReportRequest(property=f"properties/{self.pid}",date_ranges=[DateRange(start_date=st.isoformat(),end_date=e.isoformat())],dimensions=[Dimension(name="date")],metrics=[Metric(name="activeUsers"),Metric(name="sessions"),Metric(name="engagementRate")]);return self.client.run_report(q).rows
+    def test(self):
+        if not self.client:return {"connected":False,"reason":"oauth_not_configured"}
+        if not self.pid:return {"connected":False,"reason":"property_not_configured"}
+        try:
+            rows=self.report(days=1)
+            return {"connected":True,"property_id":str(self.pid),"has_data":bool(rows)}
+        except Exception as e:return {"connected":False,"property_id":str(self.pid),"reason":str(e)[:300]}
 
 class GitHub:
     def __init__(self):
         s=settings();self.token=s.GITHUB_TOKEN;self.owner=s.GITHUB_OWNER;self.repo=s.GITHUB_REPO
     def client(self):return Github(self.token) if self.token else None
     def repo_obj(self):return self.client().get_repo(f"{self.owner}/{self.repo}") if self.token and self.owner and self.repo else None
+    def test(self):
+        if not self.token:return {"connected":False,"reason":"token_not_configured"}
+        try:
+            user=self.client().get_user();result={"connected":True,"account":user.login}
+            if self.owner and self.repo:
+                repo=self.client().get_repo(f"{self.owner}/{self.repo}");result.update({"repository":repo.full_name,"default_branch":repo.default_branch})
+            return result
+        except Exception as e:return {"connected":False,"reason":str(e)[:300]}
     def create_repo(self,name,description):
         g=self.client()
         if not g or not self.owner:return {"status":"not_configured"}
@@ -77,6 +99,13 @@ class Vercel:
         headers={"Authorization":f"Bearer {self.token}","Content-Type":"application/json"};params=kwargs.pop("params",{})
         if self.team:params["teamId"]=self.team
         r=httpx.request(method,f"https://api.vercel.com{path}",headers=headers,params=params,timeout=60,**kwargs);r.raise_for_status();return r.json() if r.content else {}
+    def test(self,project=None):
+        if not self.token:return {"connected":False,"reason":"token_not_configured"}
+        try:
+            user=self.request("GET","/v2/user");result={"connected":True,"account":user.get("user",{}).get("username") or user.get("user",{}).get("name")}
+            if project:result["project"]=self.inspect(project)
+            return result
+        except Exception as e:return {"connected":False,"reason":str(e)[:300]}
     def create_project(self,name,repo_full_name,root_directory=""):
         if not self.token:return {"status":"not_configured"}
         payload={"name":name,"framework":"nextjs","gitRepository":{"type":"github","repo":repo_full_name},"rootDirectory":root_directory or None};payload={k:v for k,v in payload.items() if v is not None}
