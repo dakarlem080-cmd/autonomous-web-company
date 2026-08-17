@@ -31,12 +31,12 @@ class ToolRegistry:
         granted = set(permissions)
         return [tool for tool in self._tools.values() if tool.permission in granted]
 
-    async def execute(self, name: str, permissions, **kwargs):
-        spec = self.get(name)
-        if not self.allowed(name, permissions):
-            raise PermissionError(f"tool_forbidden:{name}")
+    async def execute(self, tool_name: str, permissions, **kwargs):
+        spec = self.get(tool_name)
+        if not self.allowed(tool_name, permissions):
+            raise PermissionError(f"tool_forbidden:{tool_name}")
         if spec.handler is None:
-            raise RuntimeError(f"tool_not_implemented:{name}")
+            raise RuntimeError(f"tool_not_implemented:{tool_name}")
         result = spec.handler(**kwargs)
         return await result if hasattr(result, "__await__") else result
 
