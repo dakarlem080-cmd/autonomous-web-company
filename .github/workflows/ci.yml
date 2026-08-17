@@ -91,8 +91,35 @@ jobs:
           PY
       - name: Type check changed files
         run: |
-          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' ')
-          [ -z "$files" ] || mypy $files --ignore-missing-imports --follow-imports=skip
+          python - <<'PY'
+          import subprocess
+
+          files = [
+              path.replace("backend/", "", 1)
+              for path in subprocess.check_output(
+                  ["git", "diff", "--name-only", "origin/main...HEAD", "--", "*.py"],
+                  text=True,
+              ).splitlines()
+              if path.startswith("backend/")
+          ]
+          if not files:
+              raise SystemExit(0)
+          result = subprocess.run(
+              [
+                  "mypy",
+                  *files,
+                  "--ignore-missing-imports",
+                  "--follow-imports=skip",
+              ],
+              text=True,
+              capture_output=True,
+          )
+          output = (result.stdout + "\n" + result.stderr).strip()
+          if output:
+              safe = output.replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+              print(f"::error file=backend::{safe[-8000:]}")
+          raise SystemExit(result.returncode)
+          PY
       - name: Bandit changed files
         run: |
           files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' ')
