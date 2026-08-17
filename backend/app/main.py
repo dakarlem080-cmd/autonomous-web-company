@@ -114,16 +114,15 @@ async def google_oauth_start(pid:int,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
  try:return RedirectResponse(authorization_url(pid),status_code=302)
  except Exception as e:raise HTTPException(503,str(e))
-@app.get("/api/projects/{pid}/google/oauth/callback")
-async def google_oauth_callback(pid:int,code:str|None=None,state:str|None=None,error:str|None=None,s:AsyncSession=Depends(db)):
- if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+@app.get("/api/google/oauth/callback")
+async def google_oauth_callback(code:str|None=None,state:str|None=None,error:str|None=None,s:AsyncSession=Depends(db)):
  from app.config import settings
  dashboard=settings().DASHBOARD_URL.rstrip("/") if getattr(settings(),"DASHBOARD_URL","") else "https://autonomous-web-company.vercel.app"
  if error:return RedirectResponse(f"{dashboard}/settings?tab=google&google=denied",status_code=302)
  if not code or not state:return RedirectResponse(f"{dashboard}/settings?tab=google&google=error",status_code=302)
  try:
-  payload=read_state(state)
-  if int(payload.get("pid"))!=pid:raise ValueError("state_project_mismatch")
+  payload=read_state(state);pid=int(payload.get("pid"))
+  if not await s.scalar(select(Project).where(Project.id==pid)):raise ValueError("project_not_found")
   token=await exchange_code(code)
   if not token.get("access_token"):raise ValueError("google_access_token_missing")
   old=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider=="google_oauth"))
@@ -138,13 +137,10 @@ async def google_oauth_callback(pid:int,code:str|None=None,state:str|None=None,e
 @app.get("/api/projects/{pid}/adsense")
 async def adsense(pid:int,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
- stored=await secret_map(pid,s);oauth=parse_google_oauth(stored)
- api=AdSense(oauth)
- accounts=await api.accounts()
+ stored=await secret_map(pid,s);oauth=parse_google_oauth(stored);api=AdSense(oauth);accounts=await api.accounts()
  if not accounts.get("connected"):
   return {"connected":False,"reason":accounts.get("reason") or accounts.get("error") or "adsense_unavailable","status_code":accounts.get("status_code")}
- account_rows=accounts.get("accounts",[])
- enriched=[]
+ account_rows=accounts.get("accounts",[]);enriched=[]
  for account in account_rows:
   name=account.get("name","");sites=await api.sites(name) if name else {"sites":[]}
   enriched.append({"account":account,"sites":sites.get("sites",[]) if sites.get("connected",True) else [],"sites_error":sites.get("error")})
@@ -197,7 +193,6 @@ async def analytics(pid:int,s:AsyncSession=Depends(db)):
   vals=[float(v.value or 0) for v in row.metric_values];u=vals[0] if len(vals)>0 else 0;sess=vals[1] if len(vals)>1 else 0;eng=vals[2] if len(vals)>2 else 0;users+=u;sessions+=sess;engagement_weight+=eng*sess
  engagement=(engagement_weight/sessions*100) if sessions else 0
  return {"project":{"id":p.id,"name":p.name,"domain":p.domain},"google":{"oauth_connected":bool(oauth),"encrypted_storage":("google_oauth" in stored),"site":site,"ga4_property_configured":bool(cfg.GA4_PROPERTY_ID)},"gsc":{"configured":gsc_connected,"clicks":round(clicks),"impressions":round(impressions),"ctr":round(clicks/impressions*100,2) if impressions else 0,"opportunities":opportunities[:20],"error":gsc_error},"ga4":{"configured":ga4_connected,"users":round(users),"sessions":round(sessions),"engagement_rate":round(engagement,2),"error":ga4_error},"period_days":28}
-
 def google_site_for_project(project,default_site):
  domain=(project.domain or "").strip().rstrip("/")
  if not domain:return default_site
@@ -211,5 +206,4 @@ async def secret_map(pid,s):
   except Exception:out[x.provider]=None
  return out
 def parse_google_oauth(stored):
- value=stored.get("google_oauth")
- return value if isinstance(value,dict) else {}
+ value=stored.get("google_oauth");return value if isinstance(value,dict) else {}
