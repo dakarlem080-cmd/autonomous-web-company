@@ -8,18 +8,18 @@ def has_column(table,column):return column in {c["name"] for c in inspect(op.get
 
 def upgrade():
     b=op.get_bind()
-    # Fresh database: the migration is the only place allowed to create the full schema.
     if not has_table("projects"):
         from app.models import Base
-        Base.metadata.create_all(bind=b)
-        return
+        Base.metadata.create_all(bind=b);return
     if not has_table("organizations"):op.create_table("organizations",sa.Column("id",sa.Integer,primary_key=True),sa.Column("name",sa.String(200),nullable=False),sa.Column("slug",sa.String(120),nullable=False,unique=True),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False))
     if not has_table("users"):op.create_table("users",sa.Column("id",sa.Integer,primary_key=True),sa.Column("email",sa.String(320),nullable=False,unique=True),sa.Column("password_hash",sa.String(512),nullable=False),sa.Column("name",sa.String(200),nullable=False),sa.Column("active",sa.Boolean,nullable=False,server_default=sa.true()),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False))
     if not has_table("memberships"):op.create_table("memberships",sa.Column("id",sa.Integer,primary_key=True),sa.Column("user_id",sa.Integer,sa.ForeignKey("users.id",ondelete="CASCADE"),nullable=False),sa.Column("organization_id",sa.Integer,sa.ForeignKey("organizations.id",ondelete="CASCADE"),nullable=False),sa.Column("role",sa.String(30),nullable=False,server_default="Member"),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False),sa.UniqueConstraint("user_id","organization_id",name="uq_membership_user_org"))
     if not has_table("session_tokens"):op.create_table("session_tokens",sa.Column("id",sa.Integer,primary_key=True),sa.Column("user_id",sa.Integer,sa.ForeignKey("users.id",ondelete="CASCADE"),nullable=False),sa.Column("token_hash",sa.String(64),nullable=False,unique=True),sa.Column("expires_at",sa.DateTime(timezone=True),nullable=False),sa.Column("revoked_at",sa.DateTime(timezone=True)),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False))
     if not has_column("projects","organization_id"):op.add_column("projects",sa.Column("organization_id",sa.Integer,sa.ForeignKey("organizations.id",ondelete="CASCADE"),nullable=True))
     if has_table("secrets"):
-        try:op.create_unique_constraint("uq_secret_project_provider","secrets",["project_id","provider"])
+        try:
+            b.execute(sa.text("DELETE FROM secrets a USING secrets b WHERE a.id > b.id AND a.project_id=b.project_id AND a.provider=b.provider"))
+            op.create_unique_constraint("uq_secret_project_provider","secrets",["project_id","provider"])
         except Exception:pass
     if has_table("employees") and not has_column("employees","budget_cents"):op.add_column("employees",sa.Column("budget_cents",sa.Integer,nullable=False,server_default="0"))
     if not has_table("tasks"):op.create_table("tasks",sa.Column("id",sa.Integer,primary_key=True),sa.Column("project_id",sa.Integer,sa.ForeignKey("projects.id",ondelete="CASCADE"),nullable=False),sa.Column("run_id",sa.Integer,sa.ForeignKey("runs.id",ondelete="SET NULL")),sa.Column("agent",sa.String(80),nullable=False),sa.Column("title",sa.String(300),nullable=False),sa.Column("payload",sa.JSON,nullable=False),sa.Column("status",sa.String(40),nullable=False,server_default="pending"),sa.Column("priority",sa.Integer,nullable=False,server_default="50"))
