@@ -16,7 +16,7 @@ from app.tool_registry import default_registry
 
 async def execute_project(p, run_id: int, e: Engine, runtime: AgentRuntime):
     async with Session() as db:
-        stored = secret_map(p.id, db)
+        stored = await secret_map(p.id, db)
         oauth = (
             stored.get("google_oauth")
             if isinstance(stored.get("google_oauth"), dict)
@@ -35,7 +35,7 @@ async def execute_project(p, run_id: int, e: Engine, runtime: AgentRuntime):
 
 
 async def tick():
-    e = Engine()
+    engine = Engine()
     runtime = AgentRuntime(default_registry())
     limit = max(1, settings().AUTONOMY_MAX_PROJECTS_PER_RUN)
     async with Session() as db:
@@ -49,28 +49,28 @@ async def tick():
             .all()[:limit]
         )
 
-    for p in projects:
+    for project in projects:
         async with Session() as db:
             if await db.scalar(
                 select(Run.id)
-                .where(Run.project_id == p.id, Run.status == "running")
+                .where(Run.project_id == project.id, Run.status == "running")
                 .limit(1)
             ):
                 continue
             run = Run(
-                project_id=p.id,
+                project_id=project.id,
                 status="running",
                 state={"trigger": "scheduler"},
             )
             db.add(run)
             await db.commit()
             await db.refresh(run)
-            rid = run.id
+            run_id = run.id
         try:
-            await execute_project(p, rid, e, runtime)
+            await execute_project(project, run_id, engine, runtime)
         except Exception as exc:
             async with Session() as db:
-                run = await db.scalar(select(Run).where(Run.id == rid))
+                run = await db.scalar(select(Run).where(Run.id == run_id))
                 run.status = "failed"
                 run.error = str(exc)[:4000]
                 run.finished_at = datetime.now(timezone.utc)
@@ -78,7 +78,7 @@ async def tick():
 
 
 async def consume():
-    e = Engine()
+    engine = Engine()
     runtime = AgentRuntime(default_registry())
     while True:
         job = await reserve(10)
@@ -87,29 +87,29 @@ async def consume():
         try:
             if job.get("kind") != "project_run":
                 raise RuntimeError("unknown_job_kind")
-            pid = int(job["payload"]["project_id"])
+            project_id = int(job["payload"]["project_id"])
             async with Session() as db:
-                p = await db.scalar(
-                    select(Project).where(Project.id == pid, Project.active)
+                project = await db.scalar(
+                    select(Project).where(Project.id == project_id, Project.active)
                 )
-                if not p:
+                if not project:
                     raise RuntimeError("project_not_found")
                 if await db.scalar(
                     select(Run.id)
-                    .where(Run.project_id == pid, Run.status == "running")
+                    .where(Run.project_id == project_id, Run.status == "running")
                     .limit(1)
                 ):
                     continue
                 run = Run(
-                    project_id=pid,
+                    project_id=project_id,
                     status="running",
                     state={"trigger": "queue", "job_id": job["id"]},
                 )
                 db.add(run)
                 await db.commit()
                 await db.refresh(run)
-                rid = run.id
-            await execute_project(p, rid, e, runtime)
+                run_id = run.id
+            await execute_project(project, run_id, engine, runtime)
         except Exception as exc:
             await retry(job, str(exc))
 
