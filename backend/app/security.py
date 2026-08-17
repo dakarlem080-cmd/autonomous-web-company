@@ -1,17 +1,16 @@
 import hashlib
+import os
 import re
 import secrets
 
 from cryptography.fernet import Fernet
-
-from app.config import settings
 
 
 PROVIDER_RE = re.compile(r"^[a-zA-Z0-9_.:-]{2,80}$")
 
 
 def cipher() -> Fernet:
-    key = (settings().ENCRYPTION_KEY or "").strip()
+    key = os.getenv("ENCRYPTION_KEY", "").strip()
     if not key:
         raise RuntimeError(
             "ENCRYPTION_KEY is required; refusing to derive encryption keys from OAuth secrets"
