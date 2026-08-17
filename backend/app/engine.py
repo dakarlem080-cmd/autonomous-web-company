@@ -19,18 +19,19 @@ class Engine:
             out.append({"kind":"search","title":" | ".join(r.get("keys",[])),"score":round(score,3),"evidence":r})
         return sorted(out,key=lambda x:x["score"],reverse=True)[:50]
     def website(self,p):
-        domain=(p.domain or "").replace("https://","").replace("http://","").rstrip("/");name=p.name.replace('"','');base=f"https://{domain}"
+        domain=(p.domain or "").replace("https://","").replace("http://","").rstrip("/");name=p.name.replace('"','');base="https://"+domain
         schema=json.dumps({"@context":"https://schema.org","@type":"WebSite","name":name,"url":base},ensure_ascii=False,separators=(",",":"));schema_literal=json.dumps(schema)
+        layout='import type { Metadata } from "next";\nimport type { ReactNode } from "react";\nexport const metadata: Metadata = { metadataBase: new URL("'+base+'"), title: "'+name+'", description: "Independent, evidence-backed information about '+name+'", alternates: { canonical: "/" }, robots: { index: true, follow: true }, openGraph: { title: "'+name+'", url: "/", type: "website" }, twitter: { card: "summary_large_image" } };\nexport default function Layout({ children }: { children: ReactNode }) { return <html lang="'+p.language+'"><body>{children}</body></html> }'
+        home='import Link from "next/link";\nexport default function Home(){return <main><header><h1>'+name+'</h1><p>Evidence-backed resources, guides and analysis.</p></header><nav><Link href="/articles">Articles</Link> · <Link href="/about">About</Link> · <Link href="/contact">Contact</Link></nav><section><h2>Latest insights</h2><p>Research-backed content will appear here as the autonomous content pipeline publishes it.</p></section><script type="application/ld+json" dangerouslySetInnerHTML={{__html:'+schema_literal+'}} /></main>}'
         return {
-          "package.json":'{"scripts":{"build":"next build","dev":"next dev","start":"next start"},"dependencies":{"next":"16.0.1","react":"19.1.1","react-dom":"19.1.1"}}',
-          "tsconfig.json":'{"compilerOptions":{"target":"ES2020","lib":["dom","es2020"],"strict":true,"jsx":"preserve","module":"esnext","moduleResolution":"bundler","noEmit":true},"include":["**/*.ts","**/*.tsx"]}',
-          "app/layout.tsx":f'import type {{Metadata}} from "next";import type {{ReactNode}} from "react";export const metadata:Metadata={{{{metadataBase:new URL("{base}"),title:"{name}",description:"Independent, evidence-backed information about {name}.",alternates:{{{{canonical:"/"}}}},robots:{{{{index:true,follow:true}}}},openGraph:{{{{title:"{name}",url:"/",type:"website"}}}},twitter:{{{{card:"summary_large_image"}}}}}}}};export default function Layout({{children}}:{{{{children:ReactNode}}}}){{{{return <html lang="{p.language}"><body>{{{{children}}}}</body></html>}}}}',
-          "app/page.tsx":f'import Link from "next/link";export default function Home(){{return <main><header><h1>{name}</h1><p>Evidence-backed resources, guides and analysis.</p></header><nav><Link href="/articles">Articles</Link> · <Link href="/about">About</Link> · <Link href="/contact">Contact</Link></nav><section><h2>Latest insights</h2><p>Research-backed content will appear here as the autonomous content pipeline publishes it.</p></section><script type="application/ld+json" dangerouslySetInnerHTML={{{{__html:{schema_literal}}}}} /></main>}}',
+          "package.json":json.dumps({"scripts":{"build":"next build","dev":"next dev","start":"next start"},"dependencies":{"next":"16.0.1","react":"19.1.1","react-dom":"19.1.1"}}),
+          "tsconfig.json":json.dumps({"compilerOptions":{"target":"ES2020","lib":["dom","es2020"],"strict":True,"jsx":"preserve","module":"esnext","moduleResolution":"bundler","noEmit":True},"include":["**/*.ts","**/*.tsx"]}),
+          "app/layout.tsx":layout,"app/page.tsx":home,
           "app/articles/page.tsx":'export default function Articles(){return <main><h1>Articles</h1><p>Research-backed articles and practical guides.</p></main>}',
-          "app/about/page.tsx":f'export default function About(){{return <main><h1>About</h1><p>{name} publishes independently researched information and transparent sources.</p></main>}}',
+          "app/about/page.tsx":'export default function About(){return <main><h1>About</h1><p>'+name+' publishes independently researched information and transparent sources.</p></main>}',
           "app/contact/page.tsx":'export default function Contact(){return <main><h1>Contact</h1><p>Use the published contact channel for questions or corrections.</p></main>}',
-          "app/robots.ts":f'import type {{MetadataRoute}} from "next";export default function robots():MetadataRoute.Robots{{return {{{{rules:{{{{userAgent:"*",allow:"/"}}}},sitemap:"{base}/sitemap.xml"}}}}}}',
-          "app/sitemap.ts":f'import type {{MetadataRoute}} from "next";export default function sitemap():MetadataRoute.Sitemap{{return ["/","/articles","/about","/contact"].map(url=>({{{{url:"{base}"+url,lastModified:new Date()}}}}))}}'
+          "app/robots.ts":'import type { MetadataRoute } from "next"; export default function robots(): MetadataRoute.Robots { return { rules: { userAgent: "*", allow: "/" }, sitemap: "'+base+'/sitemap.xml" }; }',
+          "app/sitemap.ts":'import type { MetadataRoute } from "next"; export default function sitemap(): MetadataRoute.Sitemap { return ["/","/articles","/about","/contact"].map(url => ({ url: "'+base+'" + url, lastModified: new Date() })); }'
         }
     def provision(self,p):
         s=settings();result={"status":"planned","steps":[]}
