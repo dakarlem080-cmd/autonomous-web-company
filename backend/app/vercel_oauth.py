@@ -72,7 +72,6 @@ async def exchange_code(code: str, configuration_id: str) -> dict:
         "client_id": s.VERCEL_CLIENT_ID,
         "client_secret": s.VERCEL_CLIENT_SECRET,
         "code": code,
-        "configurationId": configuration_id,
         "redirect_uri": s.VERCEL_OAUTH_REDIRECT_URI,
     }
     async with httpx.AsyncClient(timeout=30) as client:
