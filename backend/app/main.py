@@ -47,8 +47,7 @@ async def update_project(pid:int,p:ProjectPatch,s:AsyncSession=Depends(db)):
  x=await s.scalar(select(Project).where(Project.id==pid))
  if not x:raise HTTPException(404,"project_not_found")
  for k,v in p.model_dump(exclude_unset=True).items():setattr(x,k,v)
- await s.commit();await s.refresh(x)
- return {"id":x.id,"name":x.name,"domain":x.domain,"repo":x.repo,"branch":x.branch,"goal":x.goal,"language":x.language,"dry_run":x.dry_run,"active":x.active}
+ await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"domain":x.domain,"repo":x.repo,"branch":x.branch,"goal":x.goal,"language":x.language,"dry_run":x.dry_run,"active":x.active}
 @app.post("/api/projects/{pid}/secrets")
 async def secret(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid))
@@ -78,8 +77,7 @@ def parse_google_oauth(secrets):
  raw=secrets.get("google_oauth","")
  if not raw:return None
  try:
-  value=json.loads(raw)
-  return value if isinstance(value,dict) and value.get("access_token") else None
+  value=json.loads(raw);return value if isinstance(value,dict) and value.get("access_token") else None
  except Exception:return None
 
 @app.get("/api/projects/{pid}/google/oauth/start")
@@ -87,7 +85,6 @@ async def google_oauth_start(pid:int,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
  try:return RedirectResponse(authorization_url(pid),status_code=302)
  except RuntimeError as e:raise HTTPException(503,str(e))
-
 @app.get("/api/google/oauth/callback")
 async def google_oauth_callback(code:str|None=None,state:str|None=None,error:str|None=None,s:AsyncSession=Depends(db)):
  from app.config import settings
@@ -98,12 +95,10 @@ async def google_oauth_callback(code:str|None=None,state:str|None=None,error:str
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
  try:tokens=await exchange_code(code)
  except Exception as e:return RedirectResponse(f"{settings().DASHBOARD_URL}/settings?tab=google&google=error&detail={str(e)[:80]}")
- bundle={"access_token":tokens.get("access_token",""),"refresh_token":tokens.get("refresh_token",""),"expires_in":tokens.get("expires_in",0),"scope":tokens.get("scope","")}
- old=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider=="google_oauth"));value=json.dumps(bundle)
+ bundle={"access_token":tokens.get("access_token",""),"refresh_token":tokens.get("refresh_token",""),"expires_in":tokens.get("expires_in",0),"scope":tokens.get("scope","")};old=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider=="google_oauth"));value=json.dumps(bundle)
  if old:old.ciphertext=encrypt(value)
  else:s.add(Secret(project_id=pid,provider="google_oauth",ciphertext=encrypt(value)))
  await s.commit();return RedirectResponse(f"{settings().DASHBOARD_URL}/settings?tab=google&google=connected")
-
 @app.post("/api/projects/{pid}/connections/test")
 async def test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
@@ -117,13 +112,10 @@ async def test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
    r=httpx.get("https://api.vercel.com/v2/user",headers={"Authorization":f"Bearer {value}"},timeout=20);r.raise_for_status();return {"provider":"vercel","connected":True,"account":r.json().get("user",{}).get("username")}
   if p.provider in {"gsc_service_account","ga4_service_account"}:
    from google.oauth2 import service_account
-   scopes=["https://www.googleapis.com/auth/webmasters.readonly"] if p.provider=="gsc_service_account" else ["https://www.googleapis.com/auth/analytics.readonly"]
-   info=json.loads(value);creds=service_account.Credentials.from_service_account_info(info,scopes=scopes)
-   return {"provider":p.provider,"connected":True,"account":creds.service_account_email}
+   scopes=["https://www.googleapis.com/auth/webmasters.readonly"] if p.provider=="gsc_service_account" else ["https://www.googleapis.com/auth/analytics.readonly"];info=json.loads(value);creds=service_account.Credentials.from_service_account_info(info,scopes=scopes);return {"provider":p.provider,"connected":True,"account":creds.service_account_email}
   raise HTTPException(400,"unsupported_provider")
  except HTTPException:raise
  except Exception as e:return {"provider":p.provider,"connected":False,"error":str(e)[:300]}
-
 @app.post("/api/projects/{pid}/connections/save-and-test")
 async def save_and_test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
  result=await test_connection(pid,p,s)
@@ -138,6 +130,12 @@ async def project_settings(pid:int,s:AsyncSession=Depends(db)):
  from app.config import settings
  cfg=settings();providers=[x.provider for x in sr.scalars()]
  return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"repo":p.repo,"branch":p.branch,"goal":p.goal,"language":p.language,"dry_run":p.dry_run,"active":p.active},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"active":x.active} for x in er.scalars()],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in mr.scalars()],"connections":{"github":bool(cfg.GITHUB_TOKEN and cfg.GITHUB_OWNER),"vercel":bool(cfg.VERCEL_TOKEN),"gsc":bool(cfg.GOOGLE_APPLICATION_CREDENTIALS and cfg.GSC_SITE_URL) or "google_oauth" in providers,"ga4":bool(cfg.GA4_PROPERTY_ID) or "google_oauth" in providers,"google_oauth":"google_oauth" in providers,"secrets":providers}}
+@app.get("/api/projects/{pid}/autonomy")
+async def autonomy_state(pid:int,s:AsyncSession=Depends(db)):
+ p=await s.scalar(select(Project).where(Project.id==pid))
+ if not p:raise HTTPException(404,"project_not_found")
+ r=await s.execute(select(Run).where(Run.project_id==pid).order_by(Run.id.desc()).limit(1));run=r.scalar_one_or_none();state=run.state if run and isinstance(run.state,dict) else {}
+ return {"project_id":pid,"status":run.status if run else "idle","last_run_id":run.id if run else None,"release":state.get("release",{}),"autonomy":state.get("autonomy",{}),"provisioning":state.get("provisioning",{}),"error":run.error if run else None}
 
 @app.post("/api/projects/{pid}/employees")
 async def add_employee(pid:int,p:EmployeeIn,s:AsyncSession=Depends(db)):
@@ -195,8 +193,7 @@ async def analytics(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
  if not p:return {"error":"project_not_found"}
  from app.config import settings
- cfg=settings();stored=await secret_map(pid,s);oauth=parse_google_oauth(stored);site=google_site_for_project(p,cfg.GSC_SITE_URL)
- gsc=GSC(oauth=oauth,site=site);gsc_rows=[];gsc_error="";gsc_connected=False
+ cfg=settings();stored=await secret_map(pid,s);oauth=parse_google_oauth(stored);site=google_site_for_project(p,cfg.GSC_SITE_URL);gsc=GSC(oauth=oauth,site=site);gsc_rows=[];gsc_error="";gsc_connected=False
  try:gsc_rows=gsc.query(["query","page"]);gsc_connected=bool(gsc.service and gsc.site)
  except Exception as e:gsc_error=str(e)[:300]
  impressions=clicks=0.0;opportunities=[]
