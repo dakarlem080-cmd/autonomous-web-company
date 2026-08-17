@@ -61,7 +61,6 @@ def authorization_url(project_id: int) -> str:
 
 
 async def exchange_code(code: str, configuration_id: str) -> dict:
-    """Exchange a Vercel Marketplace installation code for its scoped token."""
     s = settings()
     if not s.VERCEL_CLIENT_ID or not s.VERCEL_CLIENT_SECRET:
         raise ValueError("vercel_integration_credentials_not_configured")
@@ -69,7 +68,6 @@ async def exchange_code(code: str, configuration_id: str) -> dict:
         raise ValueError("vercel_integration_redirect_not_configured")
     if not configuration_id:
         raise ValueError("vercel_configuration_id_missing")
-
     data = {
         "client_id": s.VERCEL_CLIENT_ID,
         "client_secret": s.VERCEL_CLIENT_SECRET,
@@ -114,12 +112,7 @@ async def list_projects(access_token: str, team_id: str | None = None) -> list:
     return response.json().get("projects", [])
 
 
-async def list_deployments(
-    access_token: str,
-    project_id: str,
-    team_id: str | None = None,
-    limit: int = 20,
-) -> list:
+async def list_deployments(access_token: str, project_id: str, team_id: str | None = None, limit: int = 20) -> list:
     params = {"projectId": project_id, "limit": limit}
     if team_id:
         params["teamId"] = team_id
