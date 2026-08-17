@@ -23,32 +23,24 @@ class Engine:
         schema=json.dumps({"@context":"https://schema.org","@type":"WebSite","name":name,"url":base},ensure_ascii=False,separators=(",",":"));schema_literal=json.dumps(schema)
         layout='import type { Metadata } from "next";\nimport type { ReactNode } from "react";\nexport const metadata: Metadata = { metadataBase: new URL("'+base+'"), title: "'+name+'", description: "Independent, evidence-backed information about '+name+'", alternates: { canonical: "/" }, robots: { index: true, follow: true }, openGraph: { title: "'+name+'", url: "/", type: "website" }, twitter: { card: "summary_large_image" } };\nexport default function Layout({ children }: { children: ReactNode }) { return <html lang="'+p.language+'"><body>{children}</body></html> }'
         home='import Link from "next/link";\nexport default function Home(){return <main><header><h1>'+name+'</h1><p>Evidence-backed resources, guides and analysis.</p></header><nav><Link href="/articles">Articles</Link> · <Link href="/about">About</Link> · <Link href="/contact">Contact</Link></nav><section><h2>Latest insights</h2><p>Research-backed content will appear here as the autonomous content pipeline publishes it.</p></section><script type="application/ld+json" dangerouslySetInnerHTML={{__html:'+schema_literal+'}} /></main>}'
-        return {
-          "package.json":json.dumps({"scripts":{"build":"next build","dev":"next dev","start":"next start"},"dependencies":{"next":"16.0.1","react":"19.1.1","react-dom":"19.1.1"}}),
-          "tsconfig.json":json.dumps({"compilerOptions":{"target":"ES2020","lib":["dom","es2020"],"strict":True,"jsx":"preserve","module":"esnext","moduleResolution":"bundler","noEmit":True},"include":["**/*.ts","**/*.tsx"]}),
-          "app/layout.tsx":layout,"app/page.tsx":home,
-          "app/articles/page.tsx":'export default function Articles(){return <main><h1>Articles</h1><p>Research-backed articles and practical guides.</p></main>}',
-          "app/about/page.tsx":'export default function About(){return <main><h1>About</h1><p>'+name+' publishes independently researched information and transparent sources.</p></main>}',
-          "app/contact/page.tsx":'export default function Contact(){return <main><h1>Contact</h1><p>Use the published contact channel for questions or corrections.</p></main>}',
-          "app/robots.ts":'import type { MetadataRoute } from "next"; export default function robots(): MetadataRoute.Robots { return { rules: { userAgent: "*", allow: "/" }, sitemap: "'+base+'/sitemap.xml" }; }',
-          "app/sitemap.ts":'import type { MetadataRoute } from "next"; export default function sitemap(): MetadataRoute.Sitemap { return ["/","/articles","/about","/contact"].map(url => ({ url: "'+base+'" + url, lastModified: new Date() })); }'
-        }
-    def provision(self,p):
+        return {"package.json":json.dumps({"scripts":{"build":"next build","dev":"next dev","start":"next start"},"dependencies":{"next":"16.0.1","react":"19.1.1","react-dom":"19.1.1"}}),"tsconfig.json":json.dumps({"compilerOptions":{"target":"ES2020","lib":["dom","es2020"],"strict":True,"jsx":"preserve","module":"esnext","moduleResolution":"bundler","noEmit":True},"include":["**/*.ts","**/*.tsx"]}),"app/layout.tsx":layout,"app/page.tsx":home,"app/articles/page.tsx":'export default function Articles(){return <main><h1>Articles</h1><p>Research-backed articles and practical guides.</p></main>}',"app/about/page.tsx":'export default function About(){return <main><h1>About</h1><p>'+name+' publishes independently researched information and transparent sources.</p></main>',"app/contact/page.tsx":'export default function Contact(){return <main><h1>Contact</h1><p>Use the published contact channel for questions or corrections.</p></main>',"app/robots.ts":'import type { MetadataRoute } from "next"; export default function robots(): MetadataRoute.Robots { return { rules: { userAgent: "*", allow: "/" }, sitemap: "'+base+'/sitemap.xml" }; }',"app/sitemap.ts":'import type { MetadataRoute } from "next"; export default function sitemap(): MetadataRoute.Sitemap { return ["/","/articles","/about","/contact"].map(url => ({ url: "'+base+'" + url, lastModified: new Date() })); }'}
+    def provision(self,p,credentials=None):
         s=settings();result={"status":"planned","steps":[]}
         if not s.PROVISIONING_ENABLED:return result
-        gh=GitHub();repo_name=(p.repo.split("/",1)[-1] if p.repo else p.domain.replace(".","-"))
+        credentials=credentials or {};gh=GitHub(credentials.get("github_oauth") or credentials.get("github") or {});repo_name=(p.repo.split("/",1)[-1] if p.repo else p.domain.replace(".","-"))
         if s.ALLOW_REPO_CREATION and gh.token and gh.owner:
             repo=gh.create_repo(repo_name,f"Autonomous website for {p.domain}");result["github"]=repo;result["steps"].append("github_repo")
             if repo.get("full_name"):
                 branch=f"autonomous-{p.id}-initial";gh.branch(branch,gh.client().get_repo(repo["full_name"]));result["github_files"]=gh.files(branch,self.website(p),"Initial autonomous website",gh.client().get_repo(repo["full_name"]))
                 if result["github_files"].get("status")=="committed":result["pull_request"]=gh.pr(branch,gh.client().get_repo(repo["full_name"]))
-        if s.ALLOW_VERCEL_PROVISIONING and s.VERCEL_TOKEN and result.get("github",{}).get("full_name"):
-            v=Vercel();vp=v.create_project(repo_name,result["github"]["full_name"]);result["vercel"]=vp;result["steps"].append("vercel_project")
+        vc=credentials.get("vercel_oauth") or credentials.get("vercel") or {};v=Vercel(vc)
+        if s.ALLOW_VERCEL_PROVISIONING and v.token and result.get("github",{}).get("full_name"):
+            vp=v.create_project(repo_name,result["github"]["full_name"]);result["vercel"]=vp;result["steps"].append("vercel_project")
             if s.ALLOW_DOMAIN_BINDING and vp.get("name"):
                 try:result["domain"]=v.add_domain(vp["name"],p.domain);result["steps"].append("domain")
                 except Exception as e:result["domain"]={"status":"pending","error":str(e)}
         return result
-    def cycle(self,p,oauth=None,site=None,progress=None,agents=None):
+    def cycle(self,p,oauth=None,site=None,progress=None,agents=None,credentials=None):
         def stage(name):
             if progress:progress(name)
         stage("researching");gsc=GSC(oauth=oauth,site=site);ga4=GA4(oauth=oauth);evidence={"gsc":gsc.query(["query","page"]),"ga4":ga4.report()};ops=self.opportunities(evidence["gsc"])
@@ -65,6 +57,6 @@ class Engine:
         stage("testing");qa=run_qa_sync(str(root));brain["release"]={"status":"dry_run","files":list(files),"tests":qa.model_dump()}
         if not p.dry_run and not settings().AUTONOMY_DRY_RUN:
             if not qa.passed:brain["release"]["status"]="blocked_by_qa";stage("blocked");return brain
-            stage("provisioning");brain["provisioning"]=self.provision(p)
+            stage("provisioning");brain["provisioning"]=self.provision(p,credentials)
             if brain["provisioning"].get("github_files",{}).get("status")=="committed":brain["release"]={"status":"committed","repository":brain["provisioning"].get("github",{}).get("full_name"),"pull_request":brain["provisioning"].get("pull_request"),"tests":qa.model_dump()}
         stage("complete");return brain
