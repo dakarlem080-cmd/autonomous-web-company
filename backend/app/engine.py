@@ -117,8 +117,9 @@ class Engine:
                 '<p>Research-backed articles and practical guides.</p></main>}'
             ),
             "app/about/page.tsx": (
-                'export default function About(){return <main><h1>About</h1>'
-                f'<p>{name} publishes independently researched information and transparent sources.</p></main>}'
+                'export default function About(){return <main><h1>About</h1><p>'
+                + name
+                + ' publishes independently researched information and transparent sources.</p></main>}'
             ),
             "app/contact/page.tsx": (
                 'export default function Contact(){return <main><h1>Contact</h1>'
