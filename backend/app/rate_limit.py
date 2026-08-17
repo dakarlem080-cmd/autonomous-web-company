@@ -7,7 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.config import settings
 
 
-_BUCKET = defaultdict(list)
+_BUCKET: defaultdict[str, list[float]] = defaultdict(list)
 
 
 class PublicRateLimitMiddleware(BaseHTTPMiddleware):
