@@ -98,7 +98,7 @@ async def current_user(access_token: str) -> dict:
 
 
 async def list_projects(access_token: str, team_id: str | None = None) -> list:
-    params = {"limit": 100}
+    params: dict[str, str | int] = {"limit": 100}
     if team_id:
         params["teamId"] = team_id
     async with httpx.AsyncClient(timeout=30) as client:
@@ -117,7 +117,7 @@ async def list_deployments(
     team_id: str | None = None,
     limit: int = 20,
 ) -> list:
-    params = {"projectId": project_id, "limit": limit}
+    params: dict[str, str | int] = {"projectId": project_id, "limit": limit}
     if team_id:
         params["teamId"] = team_id
     async with httpx.AsyncClient(timeout=30) as client:
