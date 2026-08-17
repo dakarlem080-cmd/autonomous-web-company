@@ -77,7 +77,18 @@ jobs:
               print(f"::error file=backend/{path},line={line}::{message}")
           raise SystemExit(result.returncode)
           PY
-      - run: pytest -q
+      - name: Pytest
+        run: |
+          python - <<'PY'
+          import subprocess
+
+          result = subprocess.run(["pytest", "-q"], text=True, capture_output=True)
+          output = (result.stdout + "\n" + result.stderr).strip()
+          if output:
+              safe = output.replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+              print(f"::error file=backend::{safe[-6000:]}")
+          raise SystemExit(result.returncode)
+          PY
       - name: Type check changed files
         run: |
           files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' ')
