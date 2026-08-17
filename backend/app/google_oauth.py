@@ -1,4 +1,4 @@
-"""Google OAuth helpers for Search Console, Analytics 4, and Google Ads."""
+"""Google OAuth helpers for Search Console, Analytics 4, Google Ads, and AdSense."""
 from __future__ import annotations
 import base64,hashlib,hmac,json,os,secrets,time
 from urllib.parse import urlencode
@@ -6,7 +6,7 @@ import httpx
 from app.config import settings
 GOOGLE_AUTH_URL="https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL="https://oauth2.googleapis.com/token"
-SCOPES="https://www.googleapis.com/auth/webmasters.readonly https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/adwords"
+SCOPES="https://www.googleapis.com/auth/webmasters.readonly https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/adwords https://www.googleapis.com/auth/adsense.readonly"
 def _env(name:str)->str:
  value=(os.environ.get(name) or "").strip()
  if value:return value
