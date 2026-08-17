@@ -25,7 +25,7 @@ def static_checks(root: Path) -> dict[str, bool]:
 
 def run_cmd(cmd: list[str], cwd: Path, timeout: int = 300):
     try:
-        process = subprocess.run(
+        process = subprocess.run(  # nosec B603 - commands are fixed/list-form and shell execution is disabled
             cmd,
             cwd=cwd,
             text=True,
