@@ -311,3 +311,15 @@ async def secret_map(pid,s):
  return out
 def parse_google_oauth(stored):
  value=stored.get("google_oauth");return value if isinstance(value,dict) else {}
+
+# Vercel Marketplace compatibility routes.
+# Keep the existing OAuth implementation untouched; these routes only bridge
+# Vercel's configured callback/configuration URLs to the existing application flow.
+app.add_api_route("/api/vercel/webhook", vercel_oauth_callback, methods=["GET"], include_in_schema=False)
+
+@app.get("/api/vercel/configure", include_in_schema=False)
+async def vercel_configure(configurationId: str | None = None):
+ from app.config import settings
+ dashboard=settings().DASHBOARD_URL.rstrip("/")
+ target=f"{dashboard}/settings?tab=vercel&configurationId={configurationId}" if configurationId else f"{dashboard}/settings?tab=vercel"
+ return RedirectResponse(target, status_code=302)
