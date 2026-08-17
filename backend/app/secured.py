@@ -1,14 +1,15 @@
-import asyncio,json,re,time
+import asyncio,json,re,time,uuid
 from collections import defaultdict
 from datetime import datetime,timezone
 from fastapi import HTTPException,Request
 from fastapi.responses import JSONResponse,Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import select,func
 from starlette.middleware.base import BaseHTTPMiddleware
+from redis.asyncio import Redis
 from app.main import app,secret_map,google_site_for_project
 from app.db import Session
-from app.models import Project,User,Membership,SessionToken,AuditLog,Run,Opportunity,Decision,Task
+from app.models import Project,User,Membership,SessionToken,AuditLog,Run,Opportunity,Decision,Task,CostUsage
 from app.auth import create_user,authenticate,issue_session,get_identity,ROLE_LEVEL
 from app.config import settings
 from app.security import hash_token
@@ -16,13 +17,17 @@ from app.engine import Engine
 from app.agent_runtime import AgentRuntime
 from app.tool_registry import default_registry
 
-# Remove the prototype wildcard CORS layer from main.py at runtime and install a strict allowlist.
 app.user_middleware=[m for m in app.user_middleware if m.cls is not CORSMiddleware]
 app.add_middleware(CORSMiddleware,allow_origins=settings().cors_origins,allow_credentials=True,allow_methods=["GET","POST","PATCH","PUT","DELETE","OPTIONS"],allow_headers=["Content-Type","Authorization"])
-
-PUBLIC_EXACT={"/","/health","/api/status","/api/auth/signup","/api/auth/login","/api/auth/logout"}
-PUBLIC_PREFIX=("/api/google/oauth/callback","/api/github/oauth/callback","/api/vercel/oauth/callback","/api/vercel/webhook","/api/vercel/configure","/docs","/openapi.json","/redoc")
+PUBLIC_EXACT={"/","/health","/api/status","/api/auth/signup","/api/auth/login","/api/auth/logout"};PUBLIC_PREFIX=("/api/google/oauth/callback","/api/github/oauth/callback","/api/vercel/oauth/callback","/api/vercel/webhook","/api/vercel/configure","/docs","/openapi.json","/redoc")
 RATE_BUCKET=defaultdict(list);RUN_LOCKS:dict[int,asyncio.Lock]={};ENGINE=Engine();RUNTIME=AgentRuntime(default_registry())
+
+async def distributed_lock(key:str,ttl:int=1800):
+    if not settings().REDIS_URL:return None,None
+    r=Redis.from_url(settings().REDIS_URL,decode_responses=True);token=uuid.uuid4().hex;ok=await r.set(key,token,nx=True,ex=ttl);await r.aclose();return (token if ok else None),r
+async def release_lock(key,token):
+    if not token or not settings().REDIS_URL:return
+    r=Redis.from_url(settings().REDIS_URL,decode_responses=True);script="if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end";await r.eval(script,1,key,token);await r.aclose()
 
 def cors(response,origin):
     if origin and origin.rstrip("/") in settings().cors_origins:response.headers.update({"Access-Control-Allow-Origin":origin,"Access-Control-Allow-Credentials":"true","Vary":"Origin"})
@@ -32,26 +37,30 @@ async def execute_run(pid:int,user_id:int):
     lock=RUN_LOCKS.setdefault(pid,asyncio.Lock())
     if lock.locked():return JSONResponse({"detail":"project_run_already_active"},status_code=409)
     async with lock:
-        async with Session() as s:
-            p=await s.scalar(select(Project).where(Project.id==pid));
-            if not p:raise HTTPException(404,"project_not_found")
-            active=await s.scalar(select(Run).where(Run.project_id==pid,Run.status=="running").limit(1))
-            if active:return JSONResponse({"detail":"project_run_already_active"},status_code=409)
-            run=Run(project_id=pid,status="running",state={"stages":[]});s.add(run);await s.commit();await s.refresh(run)
-            stored=secret_map(pid,s);oauth=stored.get("google_oauth") if isinstance(stored.get("google_oauth"),dict) else {};site=google_site_for_project(p,settings().GSC_SITE_URL);agents=await RUNTIME.load(s,pid)
+        redis_token,_=await distributed_lock(f"awc:project:{pid}:run")
+        if settings().REDIS_URL and not redis_token:return JSONResponse({"detail":"project_run_already_active"},status_code=409)
         try:
-            result=await asyncio.to_thread(ENGINE.cycle,p,oauth,site,None,agents)
             async with Session() as s:
-                run=await s.scalar(select(Run).where(Run.id==run.id));run.state=result;run.status="cycle_complete";run.finished_at=datetime.now(timezone.utc)
-                for item in result.get("autonomy",{}).get("decision",{}).get("evidence",[])[:50]:s.add(Opportunity(project_id=pid,kind=item.get("kind","search"),title=item.get("title","opportunity"),evidence=item,score=float(item.get("score",0))))
-                decision=result.get("autonomy",{}).get("decision")
-                if decision:s.add(Decision(project_id=pid,agent="ceo",decision=json.dumps(decision,ensure_ascii=False),evidence={"run_id":run.id}))
-                for t in result.get("autonomy",{}).get("tasks",[]):s.add(Task(project_id=pid,run_id=run.id,agent=t.get("agent","unknown"),title=t.get("title","task"),payload=t,status="queued",priority=int(t.get("priority",50))) )
-                s.add(AuditLog(project_id=pid,user_id=user_id,actor="user",action="run.completed",details={"run_id":run.id,"status":"cycle_complete"}));await s.commit();return result
-        except Exception as exc:
-            async with Session() as s:
-                run=await s.scalar(select(Run).where(Run.id==run.id));run.status="failed";run.error=str(exc)[:4000];run.finished_at=datetime.now(timezone.utc);run.state={"error":str(exc)[:4000]};await s.commit()
-            raise
+                p=await s.scalar(select(Project).where(Project.id==pid))
+                if not p:raise HTTPException(404,"project_not_found")
+                active=await s.scalar(select(Run.id).where(Run.project_id==pid,Run.status=="running").limit(1))
+                if active:return JSONResponse({"detail":"project_run_already_active"},status_code=409)
+                run=Run(project_id=pid,status="running",state={"trigger":"api","stages":[]});s.add(run);await s.commit();await s.refresh(run)
+                stored=secret_map(pid,s);oauth=stored.get("google_oauth") if isinstance(stored.get("google_oauth"),dict) else {};site=google_site_for_project(p,settings().GSC_SITE_URL);agents=await RUNTIME.load(s,pid)
+            try:
+                result=await asyncio.to_thread(ENGINE.cycle,p,oauth,site,None,agents,stored)
+                async with Session() as s:
+                    run=await s.scalar(select(Run).where(Run.id==run.id));run.state=result;run.status="cycle_complete";run.finished_at=datetime.now(timezone.utc)
+                    for item in result.get("autonomy",{}).get("decision",{}).get("evidence",[])[:50]:s.add(Opportunity(project_id=pid,kind=item.get("kind","search"),title=item.get("title","opportunity"),evidence=item,score=float(item.get("score",0))))
+                    decision=result.get("autonomy",{}).get("decision")
+                    if decision:s.add(Decision(project_id=pid,agent="ceo",decision=json.dumps(decision,ensure_ascii=False),evidence={"run_id":run.id}))
+                    for t in result.get("autonomy",{}).get("tasks",[]):s.add(Task(project_id=pid,run_id=run.id,agent=t.get("agent","unknown"),title=t.get("title","task"),payload=t,status="queued",priority=int(t.get("priority",50))))
+                    s.add(AuditLog(project_id=pid,user_id=user_id,actor="user",action="run.completed",details={"run_id":run.id,"status":"cycle_complete"}));await s.commit();return result
+            except Exception as exc:
+                async with Session() as s:
+                    run=await s.scalar(select(Run).where(Run.id==run.id));run.status="failed";run.error=str(exc)[:4000];run.finished_at=datetime.now(timezone.utc);run.state={"error":str(exc)[:4000]};await s.commit()
+                raise
+        finally:await release_lock(f"awc:project:{pid}:run",redis_token)
 
 class SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self,request:Request,call_next):
