@@ -1,0 +1,72 @@
+name: Fix Vercel Marketplace flow
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor == 'dakarlem080-cmd'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch Vercel Marketplace integration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('backend/app/main.py')
+          text = p.read_text()
+
+          text = text.replace(
+              'current_user as vercel_current_user,list_projects as vercel_list_projects',
+              'current_user as vercel_current_user,list_projects as vercel_list_projects,list_deployments as vercel_list_deployments',
+          )
+          text = text.replace(
+              '"vercel":bool(s.VERCEL_TOKEN or (s.VERCEL_CLIENT_ID and s.VERCEL_CLIENT_SECRET))',
+              '"vercel":False',
+          )
+          text = text.replace(
+              'vercel_connected="vercel_oauth" in providers or bool(cfg.VERCEL_TOKEN)',
+              'vercel_connected="vercel_oauth" in providers',
+          )
+          text = text.replace(
+              '  token=await vercel_exchange_code(code)\n  access=token.get("access_token")',
+              '  if not configurationId:raise ValueError("vercel_configuration_id_missing")\n  token=await vercel_exchange_code(code,configurationId)\n  access=token.get("access_token")',
+          )
+          text = text.replace(
+              '  resolved_configuration=token.get("configuration_id") or configurationId\n  value=json.dumps({"access_token":access,"token":token,"profile":profile,"team_id":resolved_team,"configuration_id":resolved_configuration},separators=(",",":"))',
+              '  resolved_configuration=configurationId or token.get("configuration_id")\n  if not resolved_configuration:raise ValueError("vercel_configuration_id_missing")\n  value=json.dumps({"access_token":access,"token":token,"profile":profile,"team_id":resolved_team,"configuration_id":resolved_configuration},separators=(",",":"))',
+          )
+          text = text.replace(
+              '  return RedirectResponse(f"{dashboard}/settings?tab=vercel&vercel=connected",status_code=302)\n except Exception:',
+              '  completion=next if next and next.startswith("https://vercel.com/") else f"{dashboard}/settings?tab=vercel&vercel=connected"\n  return RedirectResponse(completion,status_code=302)\n except Exception:',
+          )
+
+          marker = '@app.delete("/api/projects/{pid}/vercel")\n'
+          deployment_route = '''@app.get("/api/projects/{pid}/vercel/deployments")\nasync def vercel_deployments(pid:int,project_id:str|None=None,s:AsyncSession=Depends(db)):\n if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")\n stored=await secret_map(pid,s);data=stored.get("vercel_oauth") or {}\n token=data.get("access_token") if isinstance(data,dict) else None\n if not token:return {"connected":False,"deployments":[]}\n team_id=data.get("team_id") if isinstance(data,dict) else None\n if not project_id:return {"connected":True,"deployments":[],"error":"project_id_required"}\n try:deployments=await vercel_list_deployments(token,project_id,team_id)\n except Exception as e:return {"connected":True,"deployments":[],"error":str(e)[:300]}\n return {"connected":True,"project_id":project_id,"team_id":team_id,"deployments":[{"id":x.get("uid") or x.get("id"),"name":x.get("name"),"state":x.get("state"),"url":x.get("url"),"created":x.get("created"),"target":x.get("target"),"ready":x.get("ready")} for x in deployments]}\n'''
+          if deployment_route not in text:
+              text = text.replace(marker, deployment_route + marker)
+          p.write_text(text)
+
+          p = Path('dashboard/app/settings/page.tsx')
+          text = p.read_text()
+          old = 'function connectVercel(){if(pid)window.location.href=`${API}/api/projects/${pid}/vercel/oauth/start`}'
+          new = '''function connectVercel(){if(!pid)return;const w=window.open(`${API}/api/projects/${pid}/vercel/oauth/start`,"vercel-integration","width=520,height=760");if(!w){window.location.href=`${API}/api/projects/${pid}/vercel/oauth/start`;return}let n=0;const timer=window.setInterval(async()=>{n++;try{const fresh=await json<S>(`${API}/api/projects/${pid}/settings`);setS(fresh);if(fresh.connections.vercel){setVercel("connected");window.clearInterval(timer);if(!w.closed)w.close()}}catch{}if(n>60){window.clearInterval(timer)}if(w.closed&&n>3){load(pid);window.clearInterval(timer)}},2000)}'''
+          if old not in text:
+              raise SystemExit('connectVercel marker not found')
+          text = text.replace(old,new)
+          p.write_text(text)
+          PY
+
+          python -m compileall -q backend/app
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/app/main.py dashboard/app/settings/page.tsx
+          git diff --cached --quiet || git commit -m 'complete Vercel Marketplace integration flow'
+          git rm .github/workflows/fix-vercel-marketplace.yml
+          git commit -m 'remove temporary Vercel patch workflow'
+          git push
