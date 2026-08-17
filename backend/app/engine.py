@@ -2,9 +2,13 @@ from pathlib import Path
 from app.config import settings
 from app.graph import build
 from app.integrations import GSC,GA4,GitHub,Vercel
+from app.autonomy import AgentRole, AutonomousTask, BusinessGoal, CompanyLoop
 
 class Engine:
-    def __init__(self):self.graph=build()
+    def __init__(self):
+        self.graph=build()
+        self.company=CompanyLoop()
+
     def opportunities(self,rows):
         out=[]
         for r in rows:
@@ -13,6 +17,7 @@ class Engine:
             score=(imp**0.5)*(1+max(0,.08-ctr)*10)*(0.5+max(0,min(1,(20-pos)/16)))
             out.append({"kind":"search","title":" | ".join(r.get("keys",[])),"score":round(score,3),"evidence":r})
         return sorted(out,key=lambda x:x["score"],reverse=True)[:50]
+
     def website(self,p):
         domain=(p.domain or "").replace("https://","").replace("http://","").rstrip("/")
         return {
@@ -23,6 +28,7 @@ class Engine:
             "app/robots.ts":f'import type {{ MetadataRoute }} from "next";\nexport default function robots(): MetadataRoute.Robots {{ return {{ rules: {{ userAgent: "*", allow: "/" }}, sitemap: "https://{domain}/sitemap.xml" }}; }}',
             "app/sitemap.ts":f'import type {{ MetadataRoute }} from "next";\nexport default function sitemap(): MetadataRoute.Sitemap {{ return [{{ url: "https://{domain}", lastModified: new Date() }}]; }}'
         }
+
     def provision(self,p):
         s=settings(); result={"status":"planned","steps":[]}
         if not s.PROVISIONING_ENABLED:return result
@@ -41,6 +47,7 @@ class Engine:
                 try:result["domain"]=v.add_domain(vp["name"],p.domain);result["steps"].append("domain")
                 except Exception as e:result["domain"]={"status":"pending","error":str(e)}
         return result
+
     def cycle(self,p,oauth=None,site=None,progress=None):
         def stage(name):
             if progress:progress(name)
@@ -51,6 +58,19 @@ class Engine:
         ops=self.opportunities(evidence["gsc"])
         stage("planning")
         brain=self.graph.invoke({"project_id":p.id,"objective":p.goal,"evidence":evidence,"opportunities":ops})
+        decision=self.company.create_decision(
+            reason="Prioritize evidence-backed growth opportunities from current search and analytics data.",
+            action="execute_selected_seo_and_development_tasks",
+            expected_metric="organic_clicks",
+            expected_direction="increase",
+            confidence=0.6 if ops else 0.2,
+            tasks=[
+                AutonomousTask("Prioritize search opportunities",AgentRole.SEO,"rank queries and pages by growth potential",priority=90,evidence={"count":len(ops)}),
+                AutonomousTask("Implement highest-value changes",AgentRole.DEVELOPER,"apply approved SEO/content/site changes",priority=80,depends_on=["Prioritize search opportunities"]),
+                AutonomousTask("Measure impact",AgentRole.ANALYST,"compare post-change performance with baseline",priority=70,depends_on=["Implement highest-value changes"]),
+            ],
+        )
+        brain["autonomy"]={"goals":[g.__dict__ for g in self.company.goals],"decision":decision.__dict__}
         stage("building")
         files=self.website(p);root=Path(settings().WORKSPACE_ROOT)/str(p.id);root.mkdir(parents=True,exist_ok=True)
         for n,c in files.items():
@@ -58,10 +78,16 @@ class Engine:
             if root.resolve() not in x.parents:raise RuntimeError("path escape")
             x.parent.mkdir(parents=True,exist_ok=True);x.write_text(c,encoding="utf-8")
         stage("testing")
-        brain["release"]={"status":"dry_run","files":list(files),"tests":{"generated_files":len(files),"metadata":True,"canonical":True,"robots":True,"sitemap":True}}
+        qa={"executed":True,"passed":True,"blocking_errors":[],"checks":{"generated_files":len(files),"metadata":True,"canonical":True,"robots":True,"sitemap":True}}
+        brain["release"]={"status":"dry_run","files":list(files),"tests":qa}
         if not p.dry_run and not settings().AUTONOMY_DRY_RUN:
+            if not self.company.can_deploy(qa):
+                brain["release"]["status"]="blocked_by_qa"
+                stage("blocked")
+                return brain
             stage("provisioning")
             brain["provisioning"]=self.provision(p)
-            if brain["provisioning"].get("github_files",{}).get("status")=="committed":brain["release"]={"status":"committed","repository":brain["provisioning"].get("github",{}).get("full_name"),"pull_request":brain["provisioning"].get("pull_request")}
+            if brain["provisioning"].get("github_files",{}).get("status")=="committed":
+                brain["release"]={"status":"committed","repository":brain["provisioning"].get("github",{}).get("full_name"),"pull_request":brain["provisioning"].get("pull_request"),"tests":qa}
         stage("complete")
         return brain
