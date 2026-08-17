@@ -9,6 +9,12 @@ class Project(Base):
 class Secret(Base):
     __tablename__="secrets"
     id:Mapped[int]=mapped_column(primary_key=True); project_id:Mapped[int]=mapped_column(ForeignKey("projects.id")); provider:Mapped[str]=mapped_column(String(80)); ciphertext:Mapped[str]=mapped_column(Text())
+class Employee(Base):
+    __tablename__="employees"
+    id:Mapped[int]=mapped_column(primary_key=True); project_id:Mapped[int]=mapped_column(ForeignKey("projects.id")); name:Mapped[str]=mapped_column(String(120)); role:Mapped[str]=mapped_column(String(120)); agent:Mapped[str]=mapped_column(String(120),default=""); active:Mapped[bool]=mapped_column(Boolean,default=True); created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
+class AIModel(Base):
+    __tablename__="ai_models"
+    id:Mapped[int]=mapped_column(primary_key=True); project_id:Mapped[int]=mapped_column(ForeignKey("projects.id")); provider:Mapped[str]=mapped_column(String(80)); model:Mapped[str]=mapped_column(String(160)); purpose:Mapped[str]=mapped_column(String(120),default="general"); active:Mapped[bool]=mapped_column(Boolean,default=True)
 class Metric(Base):
     __tablename__="metrics"
     id:Mapped[int]=mapped_column(primary_key=True); project_id:Mapped[int]=mapped_column(ForeignKey("projects.id")); source:Mapped[str]=mapped_column(String(40)); date:Mapped[str]=mapped_column(String(20)); metric:Mapped[str]=mapped_column(String(80)); value:Mapped[float]=mapped_column(Float); dimensions:Mapped[dict]=mapped_column(JSON,default=dict)
