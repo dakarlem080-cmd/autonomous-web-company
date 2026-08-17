@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -12,14 +15,141 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Compile Python sources
-        run: python -m compileall -q app
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Compile backend
+        run: |
+          python - <<'PY'
+          import py_compile
+          from pathlib import Path
+
+          failures = 0
+          for path in sorted(Path("app").rglob("*.py")):
+              try:
+                  py_compile.compile(str(path), doraise=True)
+              except py_compile.PyCompileError as exc:
+                  failures += 1
+                  message = str(exc).replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+                  print(f"::error file={path}::{message}")
+          raise SystemExit(failures)
+          PY
+      - name: Ruff changed Python files
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          files = [
+              path
+              for path in subprocess.check_output(
+                  ["git", "diff", "--name-only", "origin/main...HEAD", "--", "*.py"],
+                  text=True,
+              ).splitlines()
+              if path.startswith("backend/")
+          ]
+          files = [str(Path(path).relative_to("backend")) for path in files]
+          if not files:
+              raise SystemExit(0)
+          result = subprocess.run(
+              ["ruff", "check", "--output-format", "json", *files],
+              text=True,
+              capture_output=True,
+          )
+          try:
+              diagnostics = json.loads(result.stdout or "[]")
+          except json.JSONDecodeError:
+              print(result.stdout)
+              print(result.stderr)
+              raise SystemExit(result.returncode)
+          for item in diagnostics:
+              location = item.get("location") or {}
+              message = item.get("message", "Ruff violation").replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+              path = item.get("filename", "backend")
+              line = location.get("row", 1)
+              print(f"::error file=backend/{path},line={line}::{message}")
+          raise SystemExit(result.returncode)
+          PY
+      - name: Pytest
+        run: |
+          python - <<'PY'
+          import subprocess
+
+          result = subprocess.run(["pytest", "-q"], text=True, capture_output=True)
+          output = (result.stdout + "\n" + result.stderr).strip()
+          if output:
+              safe = output.replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+              print(f"::error file=backend::{safe[-6000:]}")
+          raise SystemExit(result.returncode)
+          PY
+      - name: Type check changed files
+        run: |
+          python - <<'PY'
+          import subprocess
+
+          files = [
+              path.replace("backend/", "", 1)
+              for path in subprocess.check_output(
+                  ["git", "diff", "--name-only", "origin/main...HEAD", "--", "*.py"],
+                  text=True,
+              ).splitlines()
+              if path.startswith("backend/")
+          ]
+          if not files:
+              raise SystemExit(0)
+          result = subprocess.run(
+              ["mypy", *files, "--ignore-missing-imports", "--follow-imports=skip"],
+              text=True,
+              capture_output=True,
+          )
+          output = (result.stdout + "\n" + result.stderr).strip()
+          if output:
+              safe = output.replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+              print(f"::error file=backend::{safe[-8000:]}")
+          raise SystemExit(result.returncode)
+          PY
+      - name: Bandit application and migration files
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+
+          files = [
+              path.replace("backend/", "", 1)
+              for path in subprocess.check_output(
+                  ["git", "diff", "--name-only", "origin/main...HEAD", "--", "*.py"],
+                  text=True,
+              ).splitlines()
+              if path.startswith(("backend/app/", "backend/alembic/"))
+          ]
+          if not files:
+              raise SystemExit(0)
+          result = subprocess.run(
+              ["bandit", "-q", "-f", "json", "-r", *files],
+              text=True,
+              capture_output=True,
+          )
+          try:
+              report = json.loads(result.stdout or "{}")
+          except json.JSONDecodeError:
+              print(result.stdout)
+              print(result.stderr)
+              raise SystemExit(result.returncode)
+          for issue in report.get("results", []):
+              path = issue.get("filename", "backend")
+              line = issue.get("line_number", 1)
+              message = issue.get("issue_text", "Bandit finding").replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+              print(f"::error file=backend/{path},line={line}::{message}")
+          raise SystemExit(result.returncode)
+          PY
+      - run: pip-audit -r requirements.txt
 
   dashboard:
     runs-on: ubuntu-latest
@@ -27,13 +157,13 @@ jobs:
       run:
         working-directory: dashboard
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: dashboard/package.json
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
       - name: Build dashboard
         run: npm run build
