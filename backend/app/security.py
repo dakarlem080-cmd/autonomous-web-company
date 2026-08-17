@@ -1,39 +1,37 @@
-import base64
 import hashlib
 import os
+import re
+import secrets
 from cryptography.fernet import Fernet
 from app.config import settings
 
+PROVIDER_RE = re.compile(r"^[a-zA-Z0-9_.:-]{2,80}$")
 
-def cipher():
-    # Keep the explicit ENCRYPTION_KEY as the preferred production secret.
-    # For OAuth-only deployments where it was not provisioned, derive a stable
-    # Fernet key from the Google client secret so the callback can persist tokens
-    # without exposing or logging credentials. Existing ENCRYPTION_KEY values
-    # continue to take precedence.
-    key = (os.getenv("ENCRYPTION_KEY") or "").strip()
+def cipher() -> Fernet:
+    key = (settings().ENCRYPTION_KEY or "").strip()
     if not key:
-        try:
-            key = (settings().ENCRYPTION_KEY or "").strip()
-        except Exception:
-            key = ""
-    if not key:
-        secret = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
-        if not secret:
-            try:
-                secret = (settings().GOOGLE_CLIENT_SECRET or "").strip()
-            except Exception:
-                secret = ""
-        if secret:
-            key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest()).decode("ascii")
-    if not key:
-        raise RuntimeError("ENCRYPTION_KEY required")
-    return Fernet(key.encode())
+        raise RuntimeError("ENCRYPTION_KEY is required; refusing to derive encryption keys from OAuth secrets")
+    try:
+        return Fernet(key.encode("ascii"))
+    except Exception as exc:
+        raise RuntimeError("ENCRYPTION_KEY must be a valid Fernet key") from exc
 
+def encrypt(value: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError("secret_value_required")
+    return cipher().encrypt(value.encode("utf-8")).decode("ascii")
 
-def encrypt(v):
-    return cipher().encrypt(v.encode()).decode()
+def decrypt(value: str) -> str:
+    return cipher().decrypt(value.encode("ascii")).decode("utf-8")
 
+def validate_provider(provider: str) -> str:
+    provider = provider.strip()
+    if not PROVIDER_RE.fullmatch(provider):
+        raise ValueError("invalid_secret_provider")
+    return provider
 
-def decrypt(v):
-    return cipher().decrypt(v.encode()).decode()
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def new_session_token() -> str:
+    return secrets.token_urlsafe(48)
