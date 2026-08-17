@@ -19,6 +19,13 @@ def has_column(table, column):
     }
 
 
+def has_unique_constraint(table, name):
+    return any(
+        constraint.get("name") == name
+        for constraint in inspect(op.get_bind()).get_unique_constraints(table)
+    )
+
+
 def upgrade():
     bind = op.get_bind()
     if not has_table("projects"):
@@ -92,23 +99,21 @@ def upgrade():
                 nullable=True,
             ),
         )
-    if has_table("secrets"):
-        try:
-            bind.execute(
-                sa.text(
-                    "DELETE FROM secrets a USING secrets b "
-                    "WHERE a.id > b.id AND a.project_id=b.project_id "
-                    "AND a.provider=b.provider"
-                )
+    if has_table("secrets") and not has_unique_constraint(
+        "secrets", "uq_secret_project_provider"
+    ):
+        bind.execute(
+            sa.text(
+                "DELETE FROM secrets a USING secrets b "
+                "WHERE a.id > b.id AND a.project_id=b.project_id "
+                "AND a.provider=b.provider"
             )
-            op.create_unique_constraint(
-                "uq_secret_project_provider",
-                "secrets",
-                ["project_id", "provider"],
-            )
-        except Exception:
-            # Existing deployments may already contain the constraint.
-            pass
+        )
+        op.create_unique_constraint(
+            "uq_secret_project_provider",
+            "secrets",
+            ["project_id", "provider"],
+        )
     if has_table("employees") and not has_column("employees", "budget_cents"):
         op.add_column(
             "employees",
@@ -192,7 +197,11 @@ def upgrade():
         if not has_column("audit_logs", "created_at"):
             op.add_column(
                 "audit_logs",
-                sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+                sa.Column(
+                    "created_at",
+                    sa.DateTime(timezone=True),
+                    server_default=sa.func.now(),
+                ),
             )
 
 
