@@ -1,3 +1,5 @@
+# Force Railway to rebuild the backend from the current main branch.
+# Vercel OAuth routes live in backend/app/main.py and must be deployed with this service.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "backend/Dockerfile"
