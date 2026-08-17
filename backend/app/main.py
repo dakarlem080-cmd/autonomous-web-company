@@ -11,6 +11,7 @@ from app.security import encrypt,decrypt
 from app.engine import Engine
 from app.integrations import GSC,GA4,GitHub,Vercel
 from app.google_oauth import authorization_url,exchange_code,read_state
+from app.adsense import AdSense
 import json
 app=FastAPI(title="Autonomous Web Company",version="5.6")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["*"],allow_headers=["*"])
@@ -56,7 +57,7 @@ async def project_settings(pid:int,s:AsyncSession=Depends(db)):
  from app.config import settings
  cfg=settings();google_connected="google_oauth" in providers
  github_connected=bool(cfg.GITHUB_TOKEN and cfg.GITHUB_OWNER);vercel_connected=bool(cfg.VERCEL_TOKEN)
- return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"repo":p.repo,"branch":p.branch,"goal":p.goal,"language":p.language,"dry_run":p.dry_run,"active":p.active},"connections":{"google":{"connected":google_connected,"search_console":google_connected,"analytics":google_connected},"google_oauth":google_connected,"gsc":google_connected,"ga4":google_connected,"github":github_connected,"vercel":vercel_connected},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"instructions":x.instructions,"objectives":x.objectives or [],"tools":x.tools or [],"permissions":x.permissions or [],"model_id":x.model_id,"autonomy_level":x.autonomy_level,"active":x.active} for x in employees],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in models]}
+ return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"repo":p.repo,"branch":p.branch,"goal":p.goal,"language":p.language,"dry_run":p.dry_run,"active":p.active},"connections":{"google":{"connected":google_connected,"search_console":google_connected,"analytics":google_connected,"adsense":google_connected},"google_oauth":google_connected,"gsc":google_connected,"ga4":google_connected,"adsense":google_connected,"github":github_connected,"vercel":vercel_connected},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"instructions":x.instructions,"objectives":x.objectives or [],"tools":x.tools or [],"permissions":x.permissions or [],"model_id":x.model_id,"autonomy_level":x.autonomy_level,"active":x.active} for x in employees],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in models]}
 @app.post("/api/projects/{pid}/secrets")
 async def secret(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
@@ -134,6 +135,24 @@ async def google_oauth_callback(pid:int,code:str|None=None,state:str|None=None,e
  except Exception:
   await s.rollback()
   return RedirectResponse(f"{dashboard}/settings?tab=google&google=error",status_code=302)
+@app.get("/api/projects/{pid}/adsense")
+async def adsense(pid:int,s:AsyncSession=Depends(db)):
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+ stored=await secret_map(pid,s);oauth=parse_google_oauth(stored)
+ api=AdSense(oauth)
+ accounts=await api.accounts()
+ if not accounts.get("connected"):
+  return {"connected":False,"reason":accounts.get("reason") or accounts.get("error") or "adsense_unavailable","status_code":accounts.get("status_code")}
+ account_rows=accounts.get("accounts",[])
+ enriched=[]
+ for account in account_rows:
+  name=account.get("name","");sites=await api.sites(name) if name else {"sites":[]}
+  enriched.append({"account":account,"sites":sites.get("sites",[]) if sites.get("connected",True) else [],"sites_error":sites.get("error")})
+ report=None
+ if enriched:
+  name=enriched[0]["account"].get("name","")
+  if name:report=await api.report(name,28)
+ return {"connected":True,"accounts":enriched,"report":report}
 @app.post("/api/projects/{pid}/provision")
 async def provision(pid:int,s:AsyncSession=Depends(db)):
  p=await s.scalar(select(Project).where(Project.id==pid))
