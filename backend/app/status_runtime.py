@@ -18,7 +18,7 @@ class RuntimeStatusMiddleware(BaseHTTPMiddleware):
                 await db.execute(text("SELECT 1"))
                 db_ok = True
         except Exception:
-            pass
+            db_ok = False
 
         return JSONResponse(
             {
