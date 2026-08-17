@@ -6,11 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.db import init_db,Session
 from app.models import Project,Secret,Run,Opportunity,Employee,AIModel
-from app.security import encrypt
+from app.security import encrypt,decrypt
 from app.engine import Engine
 from app.integrations import GSC,GA4,GitHub,Vercel
 
-app=FastAPI(title="Autonomous Web Company",version="5.4")
+app=FastAPI(title="Autonomous Web Company",version="5.5")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["*"],allow_headers=["*"])
 engine=Engine()
 class ProjectIn(BaseModel):name:str;domain:str;repo:str="";branch:str="main";goal:str="organic_traffic";language:str="en";dry_run:bool=True
@@ -40,7 +40,18 @@ async def projects(s:AsyncSession=Depends(db)):
 async def secret(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid))
  if not r.scalar_one_or_none():raise HTTPException(404,"project_not_found")
- s.add(Secret(project_id=pid,provider=p.provider,ciphertext=encrypt(p.value)));await s.commit();return {"status":"stored"}
+ old=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider==p.provider))
+ if old:old.ciphertext=encrypt(p.value)
+ else:s.add(Secret(project_id=pid,provider=p.provider,ciphertext=encrypt(p.value)))
+ await s.commit();return {"status":"stored","provider":p.provider}
+
+async def secret_map(pid:int,s:AsyncSession):
+ r=await s.execute(select(Secret).where(Secret.project_id==pid));out={}
+ for x in r.scalars():
+  try:out[x.provider]=decrypt(x.ciphertext)
+  except Exception:out[x.provider]=""
+ return out
+
 @app.get("/api/projects/{pid}/settings")
 async def project_settings(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
@@ -49,6 +60,35 @@ async def project_settings(pid:int,s:AsyncSession=Depends(db)):
  from app.config import settings
  cfg=settings()
  return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"dry_run":p.dry_run},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"active":x.active} for x in er.scalars()],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in mr.scalars()],"connections":{"github":bool(cfg.GITHUB_TOKEN and cfg.GITHUB_OWNER),"vercel":bool(cfg.VERCEL_TOKEN),"gsc":bool(cfg.GOOGLE_APPLICATION_CREDENTIALS and cfg.GSC_SITE_URL),"ga4":bool(cfg.GA4_PROPERTY_ID),"secrets":[x.provider for x in sr.scalars()]}}
+
+@app.post("/api/projects/{pid}/connections/test")
+async def test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+ value=p.value.strip()
+ try:
+  if p.provider=="github_token":
+   from github import Github
+   user=Github(value).get_user();return {"provider":"github","connected":True,"account":user.login}
+  if p.provider=="vercel_token":
+   import httpx
+   r=httpx.get("https://api.vercel.com/v2/user",headers={"Authorization":f"Bearer {value}"},timeout=20);r.raise_for_status();return {"provider":"vercel","connected":True,"account":r.json().get("user",{}).get("username")}
+  if p.provider in {"gsc_service_account","ga4_service_account"}:
+   import json
+   from google.oauth2 import service_account
+   scopes=["https://www.googleapis.com/auth/webmasters.readonly"] if p.provider=="gsc_service_account" else ["https://www.googleapis.com/auth/analytics.readonly"]
+   info=json.loads(value);creds=service_account.Credentials.from_service_account_info(info,scopes=scopes)
+   return {"provider":p.provider,"connected":True,"account":creds.service_account_email}
+  raise HTTPException(400,"unsupported_provider")
+ except HTTPException:raise
+ except Exception as e:return {"provider":p.provider,"connected":False,"error":str(e)[:300]}
+
+@app.post("/api/projects/{pid}/connections/save-and-test")
+async def save_and_test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
+ result=await test_connection(pid,p,s)
+ if result.get("connected"):
+  await secret(pid,p,s)
+ return result
+
 @app.post("/api/projects/{pid}/employees")
 async def add_employee(pid:int,p:EmployeeIn,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
