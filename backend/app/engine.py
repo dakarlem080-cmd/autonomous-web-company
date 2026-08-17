@@ -9,7 +9,7 @@ from app.qa import run_qa_sync
 from app.tool_registry import default_registry
 
 class Engine:
-    def __init__(self): self.graph=build();self.company=CompanyLoop();self.tools=default_registry()
+    def __init__(self):self.graph=build();self.company=CompanyLoop();self.tools=default_registry()
     def opportunities(self,rows):
         out=[]
         for r in rows:
@@ -19,19 +19,18 @@ class Engine:
             out.append({"kind":"search","title":" | ".join(r.get("keys",[])),"score":round(score,3),"evidence":r})
         return sorted(out,key=lambda x:x["score"],reverse=True)[:50]
     def website(self,p):
-        domain=(p.domain or "").replace("https://","").replace("http://","").rstrip("/");name=p.name.replace('"','')
-        base=f"https://{domain}"
-        schema=json.dumps({"@context":"https://schema.org","@type":"WebSite","name":name,"url":base},ensure_ascii=False,separators=(",",":"))
+        domain=(p.domain or "").replace("https://","").replace("http://","").rstrip("/");name=p.name.replace('"','');base=f"https://{domain}"
+        schema=json.dumps({"@context":"https://schema.org","@type":"WebSite","name":name,"url":base},ensure_ascii=False,separators=(",",":"));schema_literal=json.dumps(schema)
         return {
-          "package.json":'{"scripts":{"build":"next build","dev":"next dev","start":"next start","test":"echo no-tests"},"dependencies":{"next":"16.0.1","react":"19.1.1","react-dom":"19.1.1"}}',
+          "package.json":'{"scripts":{"build":"next build","dev":"next dev","start":"next start"},"dependencies":{"next":"16.0.1","react":"19.1.1","react-dom":"19.1.1"}}',
           "tsconfig.json":'{"compilerOptions":{"target":"ES2020","lib":["dom","es2020"],"strict":true,"jsx":"preserve","module":"esnext","moduleResolution":"bundler","noEmit":true},"include":["**/*.ts","**/*.tsx"]}',
-          "app/layout.tsx":f'import type {{ Metadata }} from "next";\nimport type {{ ReactNode }} from "react";\nexport const metadata:Metadata={{metadataBase:new URL("{base}"),title:"{name}",description:"Independent, evidence-backed information about {name}.",alternates:{{canonical:"/"}},robots:{{index:true,follow:true}},openGraph:{{title:"{name}",url:"/",type:"website"}},twitter:{{card:"summary_large_image"}}}};\nexport default function Layout({{children}}:{{children:ReactNode}}){{return <html lang="{p.language}"><body>{{children}}</body></html>}}',
-          "app/page.tsx":f'import Link from "next/link";\nexport default function Home(){{return <main><header><h1>{name}</h1><p>Evidence-backed resources, guides and analysis.</p></header><nav><Link href="/articles">Articles</Link> · <Link href="/about">About</Link> · <Link href="/contact">Contact</Link></nav><section><h2>Latest insights</h2><p>Research-backed content will appear here as the autonomous content pipeline publishes it.</p></section><script type="application/ld+json" dangerouslySetInnerHTML={{{{__html:JSON.stringify({schema})}}}} /></main>}}',
+          "app/layout.tsx":f'import type {{Metadata}} from "next";import type {{ReactNode}} from "react";export const metadata:Metadata={{{{metadataBase:new URL("{base}"),title:"{name}",description:"Independent, evidence-backed information about {name}.",alternates:{{{{canonical:"/"}}}},robots:{{{{index:true,follow:true}}}},openGraph:{{{{title:"{name}",url:"/",type:"website"}}}},twitter:{{{{card:"summary_large_image"}}}}}}}};export default function Layout({{children}}:{{{{children:ReactNode}}}}){{{{return <html lang="{p.language}"><body>{{{{children}}}}</body></html>}}}}',
+          "app/page.tsx":f'import Link from "next/link";export default function Home(){{return <main><header><h1>{name}</h1><p>Evidence-backed resources, guides and analysis.</p></header><nav><Link href="/articles">Articles</Link> · <Link href="/about">About</Link> · <Link href="/contact">Contact</Link></nav><section><h2>Latest insights</h2><p>Research-backed content will appear here as the autonomous content pipeline publishes it.</p></section><script type="application/ld+json" dangerouslySetInnerHTML={{{{__html:{schema_literal}}}}} /></main>}}',
           "app/articles/page.tsx":'export default function Articles(){return <main><h1>Articles</h1><p>Research-backed articles and practical guides.</p></main>}',
           "app/about/page.tsx":f'export default function About(){{return <main><h1>About</h1><p>{name} publishes independently researched information and transparent sources.</p></main>}}',
           "app/contact/page.tsx":'export default function Contact(){return <main><h1>Contact</h1><p>Use the published contact channel for questions or corrections.</p></main>}',
-          "app/robots.ts":f'import type {{MetadataRoute}} from "next";export default function robots():MetadataRoute.Robots{{return {{rules:{{userAgent:"*",allow:"/"}},sitemap:"{base}/sitemap.xml"}}}}',
-          "app/sitemap.ts":f'import type {{MetadataRoute}} from "next";export default function sitemap():MetadataRoute.Sitemap{{return ["/","/articles","/about","/contact"].map(url=>({{url:"{base}"+url,lastModified:new Date()}}))}}'
+          "app/robots.ts":f'import type {{MetadataRoute}} from "next";export default function robots():MetadataRoute.Robots{{return {{{{rules:{{{{userAgent:"*",allow:"/"}}}},sitemap:"{base}/sitemap.xml"}}}}}}',
+          "app/sitemap.ts":f'import type {{MetadataRoute}} from "next";export default function sitemap():MetadataRoute.Sitemap{{return ["/","/articles","/about","/contact"].map(url=>({{{{url:"{base}"+url,lastModified:new Date()}}}}))}}'
         }
     def provision(self,p):
         s=settings();result={"status":"planned","steps":[]}
@@ -51,13 +50,12 @@ class Engine:
     def cycle(self,p,oauth=None,site=None,progress=None,agents=None):
         def stage(name):
             if progress:progress(name)
-        stage("researching");gsc=GSC(oauth=oauth,site=site);ga4=GA4(oauth=oauth)
-        evidence={"gsc":gsc.query(["query","page"]),"ga4":ga4.report()};ops=self.opportunities(evidence["gsc"])
+        stage("researching");gsc=GSC(oauth=oauth,site=site);ga4=GA4(oauth=oauth);evidence={"gsc":gsc.query(["query","page"]),"ga4":ga4.report()};ops=self.opportunities(evidence["gsc"])
         stage("planning");brain=self.graph.invoke({"project_id":p.id,"objective":p.goal,"evidence":evidence,"opportunities":ops})
         available={a.get("agent") for a in (agents or [])};developer="developer" in available or not agents
         tasks=[AutonomousTask("Prioritize search opportunities",AgentRole.SEO,"rank queries and pages by growth potential",priority=90,evidence={"count":len(ops)}),AutonomousTask("Implement highest-value changes",AgentRole.DEVELOPER,"apply bounded SEO/content/site changes",priority=80,depends_on=["Prioritize search opportunities"]),AutonomousTask("Measure impact",AgentRole.ANALYST,"compare post-change performance with baseline",priority=70,depends_on=["Implement highest-value changes"])]
         confidence=min(.95,.35+min(len(ops),20)/40);decision=DecisionSchema(action="execute_selected_seo_and_development_tasks",target=str(p.domain),reason="Prioritize evidence-backed opportunities from current search and analytics data.",evidence=ops[:10],expected_impact=min(1,len(ops)/20),confidence=confidence,risk="medium" if developer else "high",reversible=True,approval_required=not developer)
-        brain["autonomy"]={"agents":agents or [],"decision":decision.model_dump(),"tools":[t.name for t in self.tools.list_allowed([x for a in (agents or []) for x in (a.get("permissions") or [])])]}
+        brain["autonomy"]={"agents":agents or [],"decision":decision.model_dump(),"tasks":[{"title":t.title,"agent":t.agent.value,"objective":t.objective,"priority":t.priority,"depends_on":t.depends_on,"evidence":t.evidence} for t in tasks],"tools":[t.name for t in self.tools.list_allowed([x for a in (agents or []) for x in (a.get("permissions") or [])])]}
         stage("building");files=self.website(p);root=Path(settings().WORKSPACE_ROOT)/str(p.id);root.mkdir(parents=True,exist_ok=True)
         for n,c in files.items():
             x=(root/n).resolve()
