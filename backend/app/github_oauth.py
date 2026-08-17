@@ -20,7 +20,7 @@ def redirect_uri():
     s=settings()
     if s.GITHUB_OAUTH_REDIRECT_URI:
         return s.GITHUB_OAUTH_REDIRECT_URI.rstrip("/")
-    return f"{s.DASHBOARD_URL.rstrip('/')}/api/github/oauth/callback"
+    return "https://autonomous-web-company-production.up.railway.app/api/github/oauth/callback"
 
 def make_state(project_id:int):
     payload={"pid":project_id,"iat":int(time.time()),"nonce":hashlib.sha256(f"{project_id}:{time.time_ns()}".encode()).hexdigest()[:24]}
