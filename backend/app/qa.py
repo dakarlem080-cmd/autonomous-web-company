@@ -8,8 +8,8 @@ import httpx
 from app.ai_schemas import QAResult
 
 
-def static_checks(root: Path) -> dict:
-    checks = {
+def static_checks(root: Path) -> dict[str, bool]:
+    checks: dict[str, bool] = {
         "metadata": (root / "app/layout.tsx").exists(),
         "canonical": False,
         "robots": (root / "app/robots.ts").exists(),
@@ -39,10 +39,10 @@ def run_cmd(cmd: list[str], cwd: Path, timeout: int = 300):
 
 def run_qa_sync(root: str, smoke_url: str | None = None) -> QAResult:
     path = Path(root).resolve()
-    errors = []
-    warnings = []
-    executed = []
-    checks = {}
+    errors: list[str] = []
+    warnings: list[str] = []
+    executed: list[str] = []
+    checks: dict[str, bool] = {}
 
     if not path.exists():
         return QAResult(passed=False, errors=["workspace_missing"])
