@@ -11,8 +11,7 @@ from app.config import settings
 
 
 def _secret() -> bytes:
-    s = settings()
-    value = s.VERCEL_OAUTH_STATE_SECRET or s.ENCRYPTION_KEY
+    value = settings().VERCEL_OAUTH_STATE_SECRET.strip()
     if not value:
         raise ValueError("vercel_oauth_state_secret_not_configured")
     return value.encode()
@@ -68,6 +67,7 @@ async def exchange_code(code: str, configuration_id: str) -> dict:
         raise ValueError("vercel_integration_redirect_not_configured")
     if not configuration_id:
         raise ValueError("vercel_configuration_id_missing")
+
     data = {
         "client_id": s.VERCEL_CLIENT_ID,
         "client_secret": s.VERCEL_CLIENT_SECRET,
@@ -111,7 +111,12 @@ async def list_projects(access_token: str, team_id: str | None = None) -> list:
     return response.json().get("projects", [])
 
 
-async def list_deployments(access_token: str, project_id: str, team_id: str | None = None, limit: int = 20) -> list:
+async def list_deployments(
+    access_token: str,
+    project_id: str,
+    team_id: str | None = None,
+    limit: int = 20,
+) -> list:
     params = {"projectId": project_id, "limit": limit}
     if team_id:
         params["teamId"] = team_id
