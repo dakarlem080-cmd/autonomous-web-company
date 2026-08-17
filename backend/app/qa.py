@@ -1,6 +1,5 @@
 import asyncio
 import json
-import subprocess  # nosec B404 - subprocess is used only with fixed, non-shell commands
 from pathlib import Path
 
 import httpx
@@ -23,19 +22,27 @@ def static_checks(root: Path) -> dict[str, bool]:
     return checks
 
 
-def run_cmd(cmd: list[str], cwd: Path, timeout: int = 300):
+async def run_cmd_async(
+    cmd: list[str], cwd: Path, timeout: int = 300
+) -> tuple[int, str]:
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
     try:
-        process = subprocess.run(  # nosec B603,B607 - fixed list-form commands; shell execution is disabled
-            cmd,
-            cwd=cwd,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-        return process.returncode, (process.stdout + process.stderr)[-12000:]
-    except subprocess.TimeoutExpired:
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
         return 124, "timeout"
+    output = (stdout or b"").decode("utf-8", errors="replace")[-12000:]
+    return process.returncode or 0, output
+
+
+def run_cmd(cmd: list[str], cwd: Path, timeout: int = 300) -> tuple[int, str]:
+    return asyncio.run(run_cmd_async(cmd, cwd, timeout))
 
 
 def run_qa_sync(root: str, smoke_url: str | None = None) -> QAResult:
@@ -54,7 +61,7 @@ def run_qa_sync(root: str, smoke_url: str | None = None) -> QAResult:
     package = path / "package.json"
     if package.exists():
         try:
-            data = json.loads(package.read_text())
+            data = json.loads(package.read_text(encoding="utf-8"))
             scripts = data.get("scripts", {})
             if "build" in scripts:
                 code, output = run_cmd(["npm", "run", "build"], path)
