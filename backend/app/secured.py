@@ -3,17 +3,22 @@ from collections import defaultdict
 from datetime import datetime,timezone
 from fastapi import HTTPException,Request
 from fastapi.responses import JSONResponse,Response
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.main import app,secret_map,google_site_for_project
 from app.db import Session
-from app.models import Project,User,Membership,SessionToken,AuditLog,Run,Opportunity,Decision,Task,ToolCall
+from app.models import Project,User,Membership,SessionToken,AuditLog,Run,Opportunity,Decision,Task
 from app.auth import create_user,authenticate,issue_session,get_identity,ROLE_LEVEL
 from app.config import settings
 from app.security import hash_token
 from app.engine import Engine
 from app.agent_runtime import AgentRuntime
 from app.tool_registry import default_registry
+
+# Remove the prototype wildcard CORS layer from main.py at runtime and install a strict allowlist.
+app.user_middleware=[m for m in app.user_middleware if m.cls is not CORSMiddleware]
+app.add_middleware(CORSMiddleware,allow_origins=settings().cors_origins,allow_credentials=True,allow_methods=["GET","POST","PATCH","PUT","DELETE","OPTIONS"],allow_headers=["Content-Type","Authorization"])
 
 PUBLIC_EXACT={"/","/health","/api/status","/api/auth/signup","/api/auth/login","/api/auth/logout"}
 PUBLIC_PREFIX=("/api/google/oauth/callback","/api/github/oauth/callback","/api/vercel/oauth/callback","/api/vercel/webhook","/api/vercel/configure","/docs","/openapi.json","/redoc")
@@ -28,23 +33,20 @@ async def execute_run(pid:int,user_id:int):
     if lock.locked():return JSONResponse({"detail":"project_run_already_active"},status_code=409)
     async with lock:
         async with Session() as s:
-            p=await s.scalar(select(Project).where(Project.id==pid))
+            p=await s.scalar(select(Project).where(Project.id==pid));
             if not p:raise HTTPException(404,"project_not_found")
             active=await s.scalar(select(Run).where(Run.project_id==pid,Run.status=="running").limit(1))
             if active:return JSONResponse({"detail":"project_run_already_active"},status_code=409)
             run=Run(project_id=pid,status="running",state={"stages":[]});s.add(run);await s.commit();await s.refresh(run)
-            stored=secret_map(pid,s);oauth=stored.get("google_oauth") if isinstance(stored.get("google_oauth"),dict) else {}
-            site=google_site_for_project(p,settings().GSC_SITE_URL);agents=await RUNTIME.load(s,pid)
+            stored=secret_map(pid,s);oauth=stored.get("google_oauth") if isinstance(stored.get("google_oauth"),dict) else {};site=google_site_for_project(p,settings().GSC_SITE_URL);agents=await RUNTIME.load(s,pid)
         try:
             result=await asyncio.to_thread(ENGINE.cycle,p,oauth,site,None,agents)
             async with Session() as s:
                 run=await s.scalar(select(Run).where(Run.id==run.id));run.state=result;run.status="cycle_complete";run.finished_at=datetime.now(timezone.utc)
-                for item in result.get("autonomy",{}).get("decision",{}).get("evidence",[])[:50]:
-                    s.add(Opportunity(project_id=pid,kind=item.get("kind","search"),title=item.get("title","opportunity"),evidence=item,score=float(item.get("score",0))))
+                for item in result.get("autonomy",{}).get("decision",{}).get("evidence",[])[:50]:s.add(Opportunity(project_id=pid,kind=item.get("kind","search"),title=item.get("title","opportunity"),evidence=item,score=float(item.get("score",0))))
                 decision=result.get("autonomy",{}).get("decision")
                 if decision:s.add(Decision(project_id=pid,agent="ceo",decision=json.dumps(decision,ensure_ascii=False),evidence={"run_id":run.id}))
-                for i,t in enumerate(result.get("autonomy",{}).get("tasks",[])):
-                    s.add(Task(project_id=pid,run_id=run.id,agent=t.get("agent", "unknown"),title=t.get("title",f"task-{i}"),payload=t,status="queued",priority=50))
+                for t in result.get("autonomy",{}).get("tasks",[]):s.add(Task(project_id=pid,run_id=run.id,agent=t.get("agent","unknown"),title=t.get("title","task"),payload=t,status="queued",priority=int(t.get("priority",50))) )
                 s.add(AuditLog(project_id=pid,user_id=user_id,actor="user",action="run.completed",details={"run_id":run.id,"status":"cycle_complete"}));await s.commit();return result
         except Exception as exc:
             async with Session() as s:
@@ -55,9 +57,6 @@ class SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self,request:Request,call_next):
         path=request.url.path;origin=request.headers.get("origin","")
         if origin and origin.rstrip("/") not in settings().cors_origins:return JSONResponse({"detail":"origin_not_allowed"},status_code=403)
-        if request.method=="OPTIONS":
-            if not origin:return JSONResponse({"detail":"origin_required"},status_code=400)
-            return cors(Response(status_code=204,headers={"Access-Control-Allow-Methods":"GET,POST,PATCH,PUT,DELETE,OPTIONS","Access-Control-Allow-Headers":"Content-Type,Authorization","Access-Control-Max-Age":"600"}),origin)
         if path in PUBLIC_EXACT or any(path.startswith(p) for p in PUBLIC_PREFIX):return cors(await call_next(request),origin)
         if path.startswith("/api/"):
             key=f"{request.client.host if request.client else 'unknown'}:{path.split('/')[2] if len(path.split('/'))>2 else 'api'}";now=time.time();RATE_BUCKET[key]=[t for t in RATE_BUCKET[key] if now-t<60]
