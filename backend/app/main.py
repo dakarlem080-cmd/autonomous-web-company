@@ -1,5 +1,5 @@
 from datetime import datetime,timezone
-from fastapi import FastAPI,Depends
+from fastapi import FastAPI,Depends,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,9 +8,9 @@ from app.db import init_db,Session
 from app.models import Project,Secret,Run,Opportunity
 from app.security import encrypt
 from app.engine import Engine
-from app.integrations import GSC,GA4
+from app.integrations import GSC,GA4,GitHub,Vercel
 
-app=FastAPI(title="Autonomous Web Company",version="5.2")
+app=FastAPI(title="Autonomous Web Company",version="5.3")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["*"],allow_headers=["*"])
 engine=Engine()
 class ProjectIn(BaseModel):name:str;domain:str;repo:str="";branch:str="main";goal:str="organic_traffic";language:str="en";dry_run:bool=True
@@ -31,8 +31,7 @@ async def root():return {"service":"Autonomous Web Company Brain","status":"onli
 @app.get("/api/status")
 async def status():
  from app.config import settings
- s=settings()
- return {"status":"online","dry_run":s.AUTONOMY_DRY_RUN,"integrations":{"gsc":bool(s.GOOGLE_APPLICATION_CREDENTIALS and s.GSC_SITE_URL),"ga4":bool(s.GA4_PROPERTY_ID),"github":bool(s.GITHUB_TOKEN and s.GITHUB_OWNER and s.GITHUB_REPO),"vercel":bool(s.VERCEL_TOKEN)},"scheduler_hours":s.SCHEDULER_HOURS}
+ s=settings();return {"status":"online","dry_run":s.AUTONOMY_DRY_RUN,"provisioning_enabled":s.PROVISIONING_ENABLED,"integrations":{"gsc":bool(s.GOOGLE_APPLICATION_CREDENTIALS and s.GSC_SITE_URL),"ga4":bool(s.GA4_PROPERTY_ID),"github":bool(s.GITHUB_TOKEN and s.GITHUB_OWNER),"vercel":bool(s.VERCEL_TOKEN),"domain_binding":bool(s.VERCEL_TOKEN and s.ALLOW_DOMAIN_BINDING)},"scheduler_hours":s.SCHEDULER_HOURS}
 
 @app.post("/api/projects")
 async def create(p:ProjectIn,s:AsyncSession=Depends(db)):
@@ -44,14 +43,24 @@ async def projects(s:AsyncSession=Depends(db)):
 
 @app.post("/api/projects/{pid}/secrets")
 async def secret(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
+ r=await s.execute(select(Project).where(Project.id==pid))
+ if not r.scalar_one_or_none():raise HTTPException(404,"project_not_found")
  s.add(Secret(project_id=pid,provider=p.provider,ciphertext=encrypt(p.value)));await s.commit();return {"status":"stored"}
+
+@app.post("/api/projects/{pid}/provision")
+async def provision(pid:int,s:AsyncSession=Depends(db)):
+ r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
+ if not p:raise HTTPException(404,"project_not_found")
+ from app.config import settings
+ if settings().AUTONOMY_DRY_RUN:return {"status":"blocked","reason":"global_dry_run_enabled","next":"Set AUTONOMY_DRY_RUN=false after credentials and safeguards are verified."}
+ return engine.provision(p)
 
 @app.post("/api/projects/{pid}/run")
 async def run(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
  if not p:return {"error":"project_not_found"}
  x=Run(project_id=pid,status="running");s.add(x);await s.commit()
- try:x.state=engine.cycle(p);x.status=x.state.get("status","complete")
+ try:x.state=engine.cycle(p);x.status="cycle_complete"
  except Exception as e:x.status="failed";x.error=str(e);x.state={"error":str(e)}
  x.finished_at=datetime.now(timezone.utc);await s.commit();return x.state
 
@@ -67,19 +76,13 @@ async def ops(pid:int,s:AsyncSession=Depends(db)):
 async def analytics(pid:int,s:AsyncSession=Depends(db)):
  r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
  if not p:return {"error":"project_not_found"}
- gsc_rows=GSC().query(["query","page"])
- impressions=clicks=0.0
- opportunities=[]
+ gsc=GSC();gsc_rows=gsc.query(["query","page"]);impressions=clicks=0.0;opportunities=[]
  for row in gsc_rows:
-  imp=float(row.get("impressions",0));clk=float(row.get("clicks",0));impressions+=imp;clicks+=clk
-  keys=row.get("keys",[])
-  if imp>0: opportunities.append({"query":keys[0] if keys else "","page":keys[1] if len(keys)>1 else "","clicks":clk,"impressions":imp,"ctr":float(row.get("ctr",0))*100,"position":float(row.get("position",0))})
+  imp=float(row.get("impressions",0));clk=float(row.get("clicks",0));impressions+=imp;clicks+=clk;keys=row.get("keys",[])
+  if imp>0:opportunities.append({"query":keys[0] if keys else "","page":keys[1] if len(keys)>1 else "","clicks":clk,"impressions":imp,"ctr":float(row.get("ctr",0))*100,"position":float(row.get("position",0))})
  opportunities.sort(key=lambda x:(x["impressions"],-x["position"]),reverse=True)
- ga4_rows=GA4().report()
- users=sessions=0.0;engagement_weight=0.0
+ ga4=GA4();ga4_rows=ga4.report();users=sessions=engagement_weight=0.0
  for row in ga4_rows:
-  vals=[float(v.value or 0) for v in row.metric_values]
-  u=vals[0] if len(vals)>0 else 0;sess=vals[1] if len(vals)>1 else 0;eng=vals[2] if len(vals)>2 else 0
-  users+=u;sessions+=sess;engagement_weight+=eng*sess
+  vals=[float(v.value or 0) for v in row.metric_values];u=vals[0] if len(vals)>0 else 0;sess=vals[1] if len(vals)>1 else 0;eng=vals[2] if len(vals)>2 else 0;users+=u;sessions+=sess;engagement_weight+=eng*sess
  engagement=(engagement_weight/sessions*100) if sessions else 0
- return {"project":{"id":p.id,"name":p.name,"domain":p.domain},"gsc":{"configured":bool(GSC().service),"clicks":round(clicks),"impressions":round(impressions),"ctr":round(clicks/impressions*100,2) if impressions else 0,"opportunities":opportunities[:20]},"ga4":{"configured":bool(GA4().client),"users":round(users),"sessions":round(sessions),"engagement_rate":round(engagement,2)},"period_days":28}
+ return {"project":{"id":p.id,"name":p.name,"domain":p.domain},"gsc":{"configured":bool(gsc.service),"clicks":round(clicks),"impressions":round(impressions),"ctr":round(clicks/impressions*100,2) if impressions else 0,"opportunities":opportunities[:20]},"ga4":{"configured":bool(ga4.client),"users":round(users),"sessions":round(sessions),"engagement_rate":round(engagement,2)},"period_days":28}
