@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     MAX_FILES_CHANGED:int=40
     SCHEDULER_HOURS:int=24
     WORKSPACE_ROOT:str="./workspaces"
+    PROVISIONING_ENABLED:bool=True
+    ALLOW_REPO_CREATION:bool=True
+    ALLOW_VERCEL_PROVISIONING:bool=True
+    ALLOW_DOMAIN_BINDING:bool=True
+    AUTONOMY_MAX_PROJECTS_PER_RUN:int=5
 
 @lru_cache
 def settings(): return Settings()
