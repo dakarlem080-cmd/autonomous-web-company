@@ -3,218 +3,54 @@
 import { useEffect, useState } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "https://autonomous-web-company-production.up.railway.app";
-
 type Project = { id: number; name: string; domain: string; dry_run: boolean; active: boolean };
-type Analytics = {
-  project: Project;
-  period_days: number;
-  gsc: { configured: boolean; clicks: number; impressions: number; ctr: number; opportunities: any[] };
-  ga4: { configured: boolean; users: number; sessions: number; engagement_rate: number };
-};
+type Analytics = { project: Project; period_days: number; gsc: { configured: boolean; clicks: number; impressions: number; ctr: number; opportunities: any[] }; ga4: { configured: boolean; users: number; sessions: number; engagement_rate: number } };
+async function json<T>(url: string, init?: RequestInit): Promise<T> { const r = await fetch(url, init); if (!r.ok) throw new Error(`${r.status} ${await r.text()}`); return r.json(); }
 
-async function json<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
-  return response.json();
+function Icon({ name, size = 18 }: { name: string; size?: number }) {
+  const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  const paths: Record<string, React.ReactNode> = {
+    grid: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
+    settings: <><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="m19.4 15 .1.1 1.4 1.1-1.8 3.1-1.7-.7a8.7 8.7 0 0 1-1.6.9L15.5 21h-3.6l-.3-1.5a8.7 8.7 0 0 1-1.6-.9l-1.7.7-1.8-3.1L8 15.1a7.9 7.9 0 0 1 0-2.2l-1.5-1.1 1.8-3.1 1.7.7a8.7 8.7 0 0 1 1.6-.9L11.9 7h3.6l.3 1.5a8.7 8.7 0 0 1 1.6.9l1.7-.7 1.8 3.1-1.5 1.1a7.9 7.9 0 0 1 0 2.1Z"/></>,
+    brain: <><path d="M9 4.5A3 3 0 0 1 14 6a3 3 0 0 1 5 2.2A3 3 0 0 1 19 14a3 3 0 0 1-3 5 3 3 0 0 1-5 1.5A3 3 0 0 1 6 18a3 3 0 0 1-1-5 3 3 0 0 1 0-5A3 3 0 0 1 9 4.5Z"/><path d="M9 8v8M15 8v8M9 12h6"/></>,
+    chart: <><path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 15 3-4 3 2 5-7"/></>,
+    plug: <><path d="M8 12h8"/><path d="M10 7V3M14 7V3"/><path d="M7 7h10v4a5 5 0 0 1-10 0V7Z"/><path d="M12 16v5"/></>,
+    users: <><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="4"/><path d="M17 11a4 4 0 0 0 0-8M21 21v-2a4 4 0 0 0-3-3.9"/></>,
+    activity: <><path d="M3 12h4l2-7 4 14 2-7h6"/></>,
+    arrow: <><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></>,
+    globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></>,
+  };
+  return <svg {...common}>{paths[name] || paths.grid}</svg>;
 }
 
 export default function Page() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [analytics, setAnalytics] = useState<Analytics | null>(null);
-  const [runs, setRuns] = useState<any[]>([]);
-  const [status, setStatus] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState("");
-  const [form, setForm] = useState({
-    name: "Plastic Surgeon Istanbul",
-    domain: "plasticsurgeonistanbul.com",
-    repo: "",
-    branch: "main",
-    goal: "organic_traffic",
-    language: "en",
-  });
-
-  async function load(id?: number) {
-    try {
-      setError("");
-      const [projectList, brainStatus] = await Promise.all([
-        json<Project[]>(`${API}/api/projects`),
-        json<any>(`${API}/api/status`),
-      ]);
-      setProjects(projectList);
-      setStatus(brainStatus);
-      const target = id ?? selected ?? projectList[0]?.id;
-      if (!target) {
-        setSelected(null);
-        setAnalytics(null);
-        setRuns([]);
-        return;
-      }
-      setSelected(target);
-      const [projectAnalytics, projectRuns] = await Promise.all([
-        json<Analytics>(`${API}/api/projects/${target}/analytics`),
-        json<any[]>(`${API}/api/projects/${target}/runs`),
-      ]);
-      setAnalytics(projectAnalytics);
-      setRuns(projectRuns);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Brain API unavailable");
-    } finally {
-      setLoading(false);
-    }
-  }
-
+  const [projects, setProjects] = useState<Project[]>([]), [selected, setSelected] = useState<number | null>(null), [analytics, setAnalytics] = useState<Analytics | null>(null), [runs, setRuns] = useState<any[]>([]), [status, setStatus] = useState<any>(null), [loading, setLoading] = useState(true), [running, setRunning] = useState(false), [creating, setCreating] = useState(false), [error, setError] = useState("");
+  const [form, setForm] = useState({ name: "Plastic Surgeon Istanbul", domain: "plasticsurgeonistanbul.com", repo: "", branch: "main", goal: "organic_traffic", language: "en" });
+  async function load(id?: number) { try { setError(""); const [ps, bs] = await Promise.all([json<Project[]>(`${API}/api/projects`), json<any>(`${API}/api/status`)]); setProjects(ps); setStatus(bs); const target = id ?? selected ?? ps[0]?.id; if (!target) { setSelected(null); setAnalytics(null); setRuns([]); return; } setSelected(target); const [a, r] = await Promise.all([json<Analytics>(`${API}/api/projects/${target}/analytics`), json<any[]>(`${API}/api/projects/${target}/runs`)]); setAnalytics(a); setRuns(r); } catch (e) { setError(e instanceof Error ? e.message : "Brain API unavailable"); } finally { setLoading(false); } }
   useEffect(() => { load(); }, []);
-
-  async function createProject(event: React.FormEvent) {
-    event.preventDefault();
-    setCreating(true);
-    try {
-      const project = await json<Project>(`${API}/api/projects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, dry_run: true }),
-      });
-      await load(project.id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Project creation failed");
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function runBrain() {
-    if (!selected) return;
-    setRunning(true);
-    try {
-      await json(`${API}/api/projects/${selected}/run`, { method: "POST" });
-      await load(selected);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Run failed");
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  const online = status?.status === "online";
-  const autonomous = !status?.dry_run;
-  const project = projects.find((item) => item.id === selected);
-
-  return (
-    <main className="shell">
-      <header className="top">
-        <div className="brand">
-          <div className="brandMark">A</div>
-          <div>
-            <div className="eyebrow">AUTONOMOUS WEB COMPANY</div>
-            <h1>Control Center</h1>
-            <p>Your website, managed autonomously.</p>
-          </div>
-        </div>
-        <div className="topActions">
-          <a className="settingsLink" href="/settings">Settings</a>
-          <div className={`live ${online ? "on" : ""}`}><i />{online ? "Brain online" : "Connecting"}</div>
-        </div>
-      </header>
-
-      {error && <div className="alert"><span className="alertIcon">!</span><div>{error}</div></div>}
-
-      {loading ? (
-        <div className="card loading">Connecting to Brain…</div>
-      ) : projects.length === 0 ? (
-        <section className="hero card">
-          <div className="heroCopy">
-            <div className="step"><span>01</span> PROJECT</div>
-            <h2>Start your first website</h2>
-            <p>Create a real project for the Brain. Nothing is published automatically while Dry Run is enabled.</p>
-            <div className="dryRunNote"><span className="noteDot" /><div><strong>Dry Run is on</strong><small>Safe mode · no production changes</small></div></div>
-          </div>
-          <form className="form" onSubmit={createProject}>
-            <label>Project name<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></label>
-            <label>Domain<input value={form.domain} onChange={(e) => setForm({ ...form, domain: e.target.value })} required /></label>
-            <label>GitHub repository <em>optional</em><input placeholder="owner/repository" value={form.repo} onChange={(e) => setForm({ ...form, repo: e.target.value })} /></label>
-            <button disabled={creating}><span>{creating ? "Creating project…" : "Create project"}</span><b>→</b></button>
-          </form>
-        </section>
-      ) : (
-        <>
-          <section className="project card">
-            <div>
-              <span className="eyebrow">YOUR PROJECT</span>
-              <h2>{project?.name}</h2>
-              <a href={`https://${project?.domain}`} target="_blank" rel="noreferrer">{project?.domain} ↗</a>
-              <div className="badges"><Badge on /><Badge on={autonomous} text={autonomous ? "Autonomous" : "Dry Run"} /></div>
-            </div>
-            <div className="projectActions">
-              <select value={selected ?? ""} onChange={(e) => load(Number(e.target.value))}>
-                {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
-              <button disabled={running} onClick={runBrain}>{running ? "Running…" : "Run Brain"}</button>
-              <button className="ghost" onClick={() => load(selected ?? undefined)}>Refresh</button>
-            </div>
-          </section>
-
-          {analytics && (
-            <>
-              <div className="sectionTitle">Performance <span>Live data · {analytics.period_days} days</span></div>
-              <section className="metrics">
-                <Metric label="Search clicks" value={analytics.gsc.configured ? analytics.gsc.clicks.toLocaleString() : "—"} />
-                <Metric label="Impressions" value={analytics.gsc.configured ? analytics.gsc.impressions.toLocaleString() : "—"} />
-                <Metric label="CTR" value={analytics.gsc.configured ? `${analytics.gsc.ctr}%` : "—"} />
-                <Metric label="Users" value={analytics.ga4.configured ? analytics.ga4.users.toLocaleString() : "—"} />
-              </section>
-
-              <div className="grid">
-                <section className="card">
-                  <div className="cardHead">
-                    <div><h3>Brain</h3><p>{autonomous ? "Analyzes, decides, executes and monitors automatically." : "Analysis and planning only. Production changes are disabled."}</p></div>
-                    <Badge on={online} text={online ? "Online" : "Offline"} />
-                  </div>
-                  <div className="brainRows">
-                    <Row k="Last run" v={runs[0]?.finished_at ? new Date(runs[0].finished_at).toLocaleString() : "Never"} />
-                    <Row k="Next run" v="Automatic · every 24h" />
-                    <Row k="Mode" v={autonomous ? "Autonomous" : "Dry Run"} />
-                  </div>
-                </section>
-
-                <section className="card">
-                  <div className="cardHead">
-                    <div><h3>Connections</h3><p>Live configuration</p></div>
-                    <a className="miniLink" href="/settings">Manage</a>
-                  </div>
-                  <Integration name="GitHub" on={!!status?.integrations?.github} />
-                  <Integration name="Vercel" on={!!status?.integrations?.vercel} />
-                  <Integration name="Search Console" on={!!status?.integrations?.gsc} />
-                  <Integration name="Analytics" on={!!status?.integrations?.ga4} />
-                </section>
-              </div>
-
-              <section className="card activity">
-                <div className="cardHead"><div><h3>Activity</h3><p>Recent Brain executions</p></div></div>
-                {runs.length === 0 ? (
-                  <div className="empty">No runs yet.</div>
-                ) : (
-                  runs.slice(0, 8).map((run) => (
-                    <div className="activityRow" key={run.id}>
-                      <strong>Run #{run.id}</strong>
-                      <Badge on={run.status === "cycle_complete"} text={run.status} />
-                      <span>{run.finished_at ? new Date(run.finished_at).toLocaleString() : "Running"}</span>
-                    </div>
-                  ))
-                )}
-              </section>
-            </>
-          )}
-        </>
-      )}
+  async function createProject(e: React.FormEvent) { e.preventDefault(); setCreating(true); try { const p = await json<Project>(`${API}/api/projects`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, dry_run: true }) }); await load(p.id); } catch (e) { setError(e instanceof Error ? e.message : "Project creation failed"); } finally { setCreating(false); } }
+  async function runBrain() { if (!selected) return; setRunning(true); try { await json(`${API}/api/projects/${selected}/run`, { method: "POST" }); await load(selected); } catch (e) { setError(e instanceof Error ? e.message : "Run failed"); } finally { setRunning(false); } }
+  const online = status?.status === "online", autonomous = !status?.dry_run, project = projects.find(p => p.id === selected);
+  return <div className="appShell">
+    <aside className="sidebar">
+      <div className="sideBrand"><div className="brandMark">A</div><div><strong>Autonomous</strong><span>Web Company</span></div></div>
+      <div className="sideSection">WORKSPACE</div>
+      <nav><a className="navItem active"><Icon name="grid"/>Overview</a><a className="navItem"><Icon name="users"/>Workforce</a><a className="navItem"><Icon name="plug"/>Connections</a><a className="navItem"><Icon name="brain"/>AI Models</a><a className="navItem"><Icon name="chart"/>Google</a><a className="navItem"><Icon name="activity"/>Activity</a></nav>
+      <div className="sideBottom"><a className="navItem" href="/settings"><Icon name="settings"/>Settings</a><div className="sideStatus"><i className={online ? "on" : ""}/><div><strong>{online ? "Brain online" : "Connecting"}</strong><span>{autonomous ? "Autonomous mode" : "Dry Run mode"}</span></div></div></div>
+    </aside>
+    <main className="mainArea">
+      <header className="topbar"><div><span className="eyebrow">CONTROL CENTER</span><h1>Good to have you back.</h1><p>Monitor your company. Let the Brain handle the work.</p></div><div className="topbarRight"><div className={`live ${online ? "on" : ""}`}><i/>{online ? "Brain online" : "Connecting"}</div><a className="iconButton" href="/settings" aria-label="Settings"><Icon name="settings"/></a></div></header>
+      {error && <div className="alert"><span className="alertIcon">!</span>{error}</div>}
+      {loading ? <div className="card loading">Connecting to Brain…</div> : projects.length === 0 ? <section className="emptyHero card"><div className="emptyIcon"><Icon name="globe" size={26}/></div><span className="eyebrow">01 · PROJECT</span><h2>Start your first website</h2><p>Create a real project for the Brain. Nothing is published automatically while Dry Run is enabled.</p><form className="form" onSubmit={createProject}><label>Project name<input value={form.name} onChange={e => setForm({...form,name:e.target.value})} required/></label><label>Domain<input value={form.domain} onChange={e => setForm({...form,domain:e.target.value})} required/></label><label>GitHub repository <em>optional</em><input placeholder="owner/repository" value={form.repo} onChange={e => setForm({...form,repo:e.target.value})}/></label><button disabled={creating}>{creating ? "Creating project…" : "Create project"}<Icon name="arrow" size={16}/></button></form></section> : <>
+        <section className="project card"><div className="projectIdentity"><div className="projectIcon"><Icon name="globe"/></div><div><span className="eyebrow">ACTIVE PROJECT</span><h2>{project?.name}</h2><a href={`https://${project?.domain}`} target="_blank" rel="noreferrer">{project?.domain} ↗</a><div className="badges"><Badge on/><Badge on={autonomous} text={autonomous ? "Autonomous" : "Dry Run"}/></div></div></div><div className="projectActions"><select value={selected ?? ""} onChange={e => load(Number(e.target.value))}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><button disabled={running} onClick={runBrain}><Icon name="brain" size={16}/>{running ? "Running…" : "Run Brain"}</button><button className="ghost" onClick={() => load(selected ?? undefined)}>Refresh</button></div></section>
+        {analytics && <><div className="sectionTitle"><div><span className="eyebrow">PERFORMANCE</span><h2>Business at a glance</h2></div><span>Live data · {analytics.period_days} days</span></div><section className="metrics"><Metric icon="chart" label="Search clicks" value={analytics.gsc.configured ? analytics.gsc.clicks.toLocaleString() : "—"}/><Metric icon="activity" label="Impressions" value={analytics.gsc.configured ? analytics.gsc.impressions.toLocaleString() : "—"}/><Metric icon="chart" label="CTR" value={analytics.gsc.configured ? `${analytics.gsc.ctr}%` : "—"}/><Metric icon="users" label="Users" value={analytics.ga4.configured ? analytics.ga4.users.toLocaleString() : "—"}/></section>
+        <div className="grid"><section className="card brainCard"><div className="cardHead"><div className="titleIcon"><div className="softIcon"><Icon name="brain"/></div><div><h3>Brain</h3><p>{autonomous ? "Analyzes, decides, executes and monitors automatically." : "Analysis and planning only. Production changes are disabled."}</p></div></div><Badge on={online} text={online ? "Online" : "Offline"}/></div><div className="brainRows"><Row k="Last run" v={runs[0]?.finished_at ? new Date(runs[0].finished_at).toLocaleString() : "Never"}/><Row k="Next run" v="Automatic · every 24h"/><Row k="Mode" v={autonomous ? "Autonomous" : "Dry Run"}/></div></section><section className="card"><div className="cardHead"><div className="titleIcon"><div className="softIcon"><Icon name="plug"/></div><div><h3>Connections</h3><p>Tools available to the Brain</p></div></div><a className="miniLink" href="/settings">Manage <Icon name="arrow" size={13}/></a></div><Integration name="GitHub" icon="github" on={!!status?.integrations?.github}/><Integration name="Vercel" icon="globe" on={!!status?.integrations?.vercel}/><Integration name="Search Console" icon="chart" on={!!status?.integrations?.gsc}/><Integration name="Analytics" icon="activity" on={!!status?.integrations?.ga4}/></section></div>
+        <section className="card activity"><div className="cardHead"><div className="titleIcon"><div className="softIcon"><Icon name="activity"/></div><div><h3>Activity</h3><p>Recent Brain executions</p></div></div><a className="miniLink">View all <Icon name="arrow" size={13}/></a></div>{runs.length === 0 ? <div className="empty">No runs yet.</div> : runs.slice(0,8).map(r => <div className="activityRow" key={r.id}><div className="runIcon"><Icon name="brain" size={15}/></div><div><strong>Run #{r.id}</strong><small>{r.status}</small></div><Badge on={r.status === "cycle_complete"} text={r.status === "cycle_complete" ? "Completed" : r.status}/><span>{r.finished_at ? new Date(r.finished_at).toLocaleString() : "Running"}</span></div>)}</section></>}
+      </>}
     </main>
-  );
+  </div>;
 }
-
-function Metric({ label, value }: { label: string; value: string }) { return <div className="metric"><span>{label}</span><strong>{value}</strong></div>; }
-function Badge({ on, text = "Connected" }: { on: boolean; text?: string }) { return <span className={`badge ${on ? "good" : "muted"}`}><i />{text}</span>; }
-function Row({ k, v }: { k: string; v: string }) { return <div className="row"><span>{k}</span><strong>{v}</strong></div>; }
-function Integration({ name, on }: { name: string; on: boolean }) { return <div className="integration"><strong>{name}</strong><Badge on={on} text={on ? "Connected" : "Not connected"} /></div>; }
+function Metric({icon,label,value}:{icon:string;label:string;value:string}){return <div className="metric"><div className="metricIcon"><Icon name={icon}/></div><span>{label}</span><strong>{value}</strong></div>}
+function Badge({on,text="Connected"}:{on:boolean;text?:string}){return <span className={`badge ${on?"good":"muted"}`}><i/>{text}</span>}
+function Row({k,v}:{k:string;v:string}){return <div className="row"><span>{k}</span><strong>{v}</strong></div>}
+function Integration({name,icon,on}:{name:string;icon:string;on:boolean}){return <div className="integration"><div className="integrationName"><span><Icon name={icon} size={15}/></span><strong>{name}</strong></div><Badge on={on} text={on?"Connected":"Not connected"}/></div>}
