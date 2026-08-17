@@ -51,46 +51,51 @@ def read_state(state: str) -> dict:
 def authorization_url(project_id: int) -> str:
     s = settings()
     if not s.VERCEL_CLIENT_ID:
-        raise ValueError("vercel_oauth_not_configured")
+        raise ValueError("vercel_integration_client_id_not_configured")
     if not s.VERCEL_OAUTH_REDIRECT_URI:
-        raise ValueError("vercel_oauth_redirect_not_configured")
+        raise ValueError("vercel_integration_redirect_not_configured")
     slug = s.VERCEL_INTEGRATION_SLUG.strip() or "autonomous-web-company"
     state = make_state(project_id)
-    params = {
-        "source": "external",
-        "state": state,
-    }
+    params = {"source": "external", "state": state}
     return f"https://vercel.com/integrations/{slug}/new?{urlencode(params)}"
 
 
-async def exchange_code(code: str) -> dict:
+async def exchange_code(code: str, configuration_id: str) -> dict:
+    """Exchange a Vercel Marketplace installation code for its scoped token."""
     s = settings()
     if not s.VERCEL_CLIENT_ID or not s.VERCEL_CLIENT_SECRET:
-        raise ValueError("vercel_oauth_not_configured")
+        raise ValueError("vercel_integration_credentials_not_configured")
     if not s.VERCEL_OAUTH_REDIRECT_URI:
-        raise ValueError("vercel_oauth_redirect_not_configured")
-    response = await httpx.AsyncClient(timeout=30).post(
-        "https://api.vercel.com/v2/oauth/access_token",
-        data={
-            "client_id": s.VERCEL_CLIENT_ID,
-            "client_secret": s.VERCEL_CLIENT_SECRET,
-            "code": code,
-            "redirect_uri": s.VERCEL_OAUTH_REDIRECT_URI,
-        },
-        headers={"Accept": "application/json"},
-    )
+        raise ValueError("vercel_integration_redirect_not_configured")
+    if not configuration_id:
+        raise ValueError("vercel_configuration_id_missing")
+
+    data = {
+        "client_id": s.VERCEL_CLIENT_ID,
+        "client_secret": s.VERCEL_CLIENT_SECRET,
+        "code": code,
+        "configurationId": configuration_id,
+        "redirect_uri": s.VERCEL_OAUTH_REDIRECT_URI,
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            "https://api.vercel.com/v2/oauth/access_token",
+            data=data,
+            headers={"Accept": "application/json"},
+        )
     response.raise_for_status()
-    data = response.json()
-    if not data.get("access_token"):
+    payload = response.json()
+    if not payload.get("access_token"):
         raise ValueError("vercel_access_token_missing")
-    return data
+    return payload
 
 
 async def current_user(access_token: str) -> dict:
-    response = await httpx.AsyncClient(timeout=30).get(
-        "https://api.vercel.com/v2/user",
-        headers={"Authorization": f"Bearer {access_token}"},
-    )
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            "https://api.vercel.com/v2/user",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
     response.raise_for_status()
     return response.json()
 
@@ -99,10 +104,30 @@ async def list_projects(access_token: str, team_id: str | None = None) -> list:
     params = {"limit": 100}
     if team_id:
         params["teamId"] = team_id
-    response = await httpx.AsyncClient(timeout=30).get(
-        "https://api.vercel.com/v9/projects",
-        params=params,
-        headers={"Authorization": f"Bearer {access_token}"},
-    )
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            "https://api.vercel.com/v9/projects",
+            params=params,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
     response.raise_for_status()
     return response.json().get("projects", [])
+
+
+async def list_deployments(
+    access_token: str,
+    project_id: str,
+    team_id: str | None = None,
+    limit: int = 20,
+) -> list:
+    params = {"projectId": project_id, "limit": limit}
+    if team_id:
+        params["teamId"] = team_id
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            "https://api.vercel.com/v6/deployments",
+            params=params,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    response.raise_for_status()
+    return response.json().get("deployments", [])
