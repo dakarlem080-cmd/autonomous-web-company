@@ -1,6 +1,7 @@
 from datetime import datetime,timezone
 from fastapi import FastAPI,Depends,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,8 +10,10 @@ from app.models import Project,Secret,Run,Opportunity,Employee,AIModel
 from app.security import encrypt,decrypt
 from app.engine import Engine
 from app.integrations import GSC,GA4,GitHub,Vercel
+from app.google_oauth import authorization_url,exchange_code,read_state
+import json
 
-app=FastAPI(title="Autonomous Web Company",version="5.5")
+app=FastAPI(title="Autonomous Web Company",version="5.6")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["*"],allow_headers=["*"])
 engine=Engine()
 class ProjectIn(BaseModel):name:str;domain:str;repo:str="";branch:str="main";goal:str="organic_traffic";language:str="en";dry_run:bool=True
@@ -52,14 +55,29 @@ async def secret_map(pid:int,s:AsyncSession):
   except Exception:out[x.provider]=""
  return out
 
-@app.get("/api/projects/{pid}/settings")
-async def project_settings(pid:int,s:AsyncSession=Depends(db)):
- r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
- if not p:raise HTTPException(404,"project_not_found")
- er=await s.execute(select(Employee).where(Employee.project_id==pid));mr=await s.execute(select(AIModel).where(AIModel.project_id==pid));sr=await s.execute(select(Secret).where(Secret.project_id==pid))
+@app.get("/api/projects/{pid}/google/oauth/start")
+async def google_oauth_start(pid:int,s:AsyncSession=Depends(db)):
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+ try:return RedirectResponse(authorization_url(pid),status_code=302)
+ except RuntimeError as e:raise HTTPException(503,str(e))
+
+@app.get("/api/google/oauth/callback")
+async def google_oauth_callback(code:str|None=None,state:str|None=None,error:str|None=None,s:AsyncSession=Depends(db)):
  from app.config import settings
- cfg=settings()
- return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"dry_run":p.dry_run},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"active":x.active} for x in er.scalars()],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in mr.scalars()],"connections":{"github":bool(cfg.GITHUB_TOKEN and cfg.GITHUB_OWNER),"vercel":bool(cfg.VERCEL_TOKEN),"gsc":bool(cfg.GOOGLE_APPLICATION_CREDENTIALS and cfg.GSC_SITE_URL),"ga4":bool(cfg.GA4_PROPERTY_ID),"secrets":[x.provider for x in sr.scalars()]}}
+ if error:return RedirectResponse(f"{settings().DASHBOARD_URL}/settings?tab=google&google=denied")
+ if not code or not state:raise HTTPException(400,"missing_oauth_response")
+ try:payload=read_state(state);pid=int(payload["pid"])
+ except Exception:raise HTTPException(400,"invalid_oauth_state")
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+ try:tokens=await exchange_code(code)
+ except Exception as e:return RedirectResponse(f"{settings().DASHBOARD_URL}/settings?tab=google&google=error&detail={str(e)[:80]}")
+ bundle={"access_token":tokens.get("access_token",""),"refresh_token":tokens.get("refresh_token",""),"expires_in":tokens.get("expires_in",0),"scope":tokens.get("scope","")}
+ old=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider=="google_oauth"))
+ value=json.dumps(bundle)
+ if old:old.ciphertext=encrypt(value)
+ else:s.add(Secret(project_id=pid,provider="google_oauth",ciphertext=encrypt(value)))
+ await s.commit()
+ return RedirectResponse(f"{settings().DASHBOARD_URL}/settings?tab=google&google=connected")
 
 @app.post("/api/projects/{pid}/connections/test")
 async def test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
@@ -73,7 +91,6 @@ async def test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
    import httpx
    r=httpx.get("https://api.vercel.com/v2/user",headers={"Authorization":f"Bearer {value}"},timeout=20);r.raise_for_status();return {"provider":"vercel","connected":True,"account":r.json().get("user",{}).get("username")}
   if p.provider in {"gsc_service_account","ga4_service_account"}:
-   import json
    from google.oauth2 import service_account
    scopes=["https://www.googleapis.com/auth/webmasters.readonly"] if p.provider=="gsc_service_account" else ["https://www.googleapis.com/auth/analytics.readonly"]
    info=json.loads(value);creds=service_account.Credentials.from_service_account_info(info,scopes=scopes)
@@ -85,9 +102,17 @@ async def test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
 @app.post("/api/projects/{pid}/connections/save-and-test")
 async def save_and_test_connection(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
  result=await test_connection(pid,p,s)
- if result.get("connected"):
-  await secret(pid,p,s)
+ if result.get("connected"):await secret(pid,p,s)
  return result
+
+@app.get("/api/projects/{pid}/settings")
+async def project_settings(pid:int,s:AsyncSession=Depends(db)):
+ r=await s.execute(select(Project).where(Project.id==pid));p=r.scalar_one_or_none()
+ if not p:raise HTTPException(404,"project_not_found")
+ er=await s.execute(select(Employee).where(Employee.project_id==pid));mr=await s.execute(select(AIModel).where(AIModel.project_id==pid));sr=await s.execute(select(Secret).where(Secret.project_id==pid))
+ from app.config import settings
+ cfg=settings();providers=[x.provider for x in sr.scalars()]
+ return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"dry_run":p.dry_run},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"active":x.active} for x in er.scalars()],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in mr.scalars()],"connections":{"github":bool(cfg.GITHUB_TOKEN and cfg.GITHUB_OWNER),"vercel":bool(cfg.VERCEL_TOKEN),"gsc":bool(cfg.GOOGLE_APPLICATION_CREDENTIALS and cfg.GSC_SITE_URL) or "google_oauth" in providers,"ga4":bool(cfg.GA4_PROPERTY_ID) or "google_oauth" in providers,"google_oauth":"google_oauth" in providers,"secrets":providers}}
 
 @app.post("/api/projects/{pid}/employees")
 async def add_employee(pid:int,p:EmployeeIn,s:AsyncSession=Depends(db)):
