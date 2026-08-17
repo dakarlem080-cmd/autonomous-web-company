@@ -1,6 +1,7 @@
 "use client";
 import { useEffect } from "react";
 import "./globals.css";
+import "./command-ui.css";
 import "./settings/settings.css";
 
 export default function Layout({children}:{children:React.ReactNode}){
