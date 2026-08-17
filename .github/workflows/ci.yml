@@ -1,37 +1,60 @@
 name: CI
+
 on:
   push:
     branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+
 jobs:
   backend:
     runs-on: ubuntu-latest
-    defaults: {run: {working-directory: backend}}
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
-        with: {fetch-depth: 0}
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
-        with: {python-version: "3.12", cache: pip, cache-dependency-path: backend/requirements.txt}
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
-      - run: python -m compileall -q app
+      - name: Compile backend
+        run: |
+          if ! python -m compileall -q app; then
+            python -m compileall app
+            exit 1
+          fi
       - name: Ruff changed Python files
         run: |
-          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' '); [ -z "$files" ] || ruff check $files
+          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' ')
+          [ -z "$files" ] || ruff check $files
       - run: pytest -q
       - name: Type check changed files
         run: |
-          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' '); [ -z "$files" ] || mypy $files --ignore-missing-imports --follow-imports=skip
+          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' ')
+          [ -z "$files" ] || mypy $files --ignore-missing-imports --follow-imports=skip
       - name: Bandit changed files
         run: |
-          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' '); [ -z "$files" ] || bandit -q $files
+          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' ')
+          [ -z "$files" ] || bandit -q $files
       - run: pip-audit -r requirements.txt
+
   dashboard:
     runs-on: ubuntu-latest
-    defaults: {run: {working-directory: dashboard}}
+    defaults:
+      run:
+        working-directory: dashboard
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: {node-version: 22}
+        with:
+          node-version: 22
       - name: Install dependencies
         run: npm install --no-audit --no-fund
       - name: Audit dependencies
