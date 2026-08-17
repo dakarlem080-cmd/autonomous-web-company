@@ -1,7 +1,6 @@
 from datetime import datetime,timezone
 from fastapi import FastAPI,Depends,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -46,6 +45,17 @@ async def update_project(pid:int,p:ProjectPatch,s:AsyncSession=Depends(db)):
  if not x:raise HTTPException(404,"project_not_found")
  for k,v in p.model_dump(exclude_unset=True).items():setattr(x,k,v)
  await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"domain":x.domain,"repo":x.repo,"branch":x.branch,"goal":x.goal,"language":x.language,"dry_run":x.dry_run,"active":x.active}
+@app.get("/api/projects/{pid}/settings")
+async def project_settings(pid:int,s:AsyncSession=Depends(db)):
+ p=await s.scalar(select(Project).where(Project.id==pid))
+ if not p:raise HTTPException(404,"project_not_found")
+ secrets=(await s.execute(select(Secret).where(Secret.project_id==pid))).scalars().all()
+ providers={x.provider for x in secrets}
+ employees=(await s.execute(select(Employee).where(Employee.project_id==pid).order_by(Employee.id))).scalars().all()
+ models=(await s.execute(select(AIModel).where(AIModel.project_id==pid).order_by(AIModel.id))).scalars().all()
+ from app.config import settings
+ cfg=settings()
+ return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"repo":p.repo,"branch":p.branch,"goal":p.goal,"language":p.language,"dry_run":p.dry_run,"active":p.active},"connections":{"google":{"connected":"google_oauth" in providers,"search_console":"google_oauth" in providers,"analytics":"google_oauth" in providers},"github":{"connected":bool(cfg.GITHUB_TOKEN and cfg.GITHUB_OWNER)},"vercel":{"connected":bool(cfg.VERCEL_TOKEN),"domain_binding":bool(cfg.VERCEL_TOKEN and cfg.ALLOW_DOMAIN_BINDING)}},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"instructions":x.instructions,"objectives":x.objectives or [],"tools":x.tools or [],"permissions":x.permissions or [],"model_id":x.model_id,"autonomy_level":x.autonomy_level,"active":x.active} for x in employees],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in models]}
 @app.post("/api/projects/{pid}/secrets")
 async def secret(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
  if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
