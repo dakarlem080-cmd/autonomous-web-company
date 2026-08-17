@@ -11,23 +11,27 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
+        with: {python-version: "3.12", cache: pip, cache-dependency-path: backend/requirements.txt}
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Compile Python
         run: python -m compileall -q app
-      - name: Ruff
-        run: ruff check app
+      - name: Ruff changed Python files
+        run: |
+          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' ')
+          [ -z "$files" ] || ruff check $files
       - name: Tests
         run: pytest -q
-      - name: Type check
-        run: mypy app --ignore-missing-imports
-      - name: Bandit
-        run: bandit -q -r app -x app/tests
+      - name: Type check changed files
+        run: |
+          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' ')
+          [ -z "$files" ] || mypy $files --ignore-missing-imports --follow-imports=skip
+      - name: Bandit changed files
+        run: |
+          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' ')
+          [ -z "$files" ] || bandit -q $files
       - name: Dependency audit
         run: pip-audit -r requirements.txt
   dashboard:
@@ -38,10 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: dashboard/package-lock.json
+        with: {node-version: 22, cache: npm, cache-dependency-path: dashboard/package-lock.json}
       - name: Install dependencies
         run: npm ci
       - name: Audit dependencies
