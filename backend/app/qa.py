@@ -1,6 +1,6 @@
 import asyncio
 import json
-import subprocess
+import subprocess  # nosec B404 - subprocess is used only with fixed, non-shell commands
 from pathlib import Path
 
 import httpx
@@ -31,6 +31,7 @@ def run_cmd(cmd: list[str], cwd: Path, timeout: int = 300):
             text=True,
             capture_output=True,
             timeout=timeout,
+            check=False,
         )
         return process.returncode, (process.stdout + process.stderr)[-12000:]
     except subprocess.TimeoutExpired:
