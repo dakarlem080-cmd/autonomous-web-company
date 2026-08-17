@@ -12,6 +12,7 @@ from app.engine import Engine
 from app.integrations import GSC,GA4,GitHub,Vercel
 from app.google_oauth import authorization_url,exchange_code,read_state
 from app.github_oauth import authorization_url as github_authorization_url,exchange_code as github_exchange_code,read_state as github_read_state,profile as github_profile,repositories as github_repositories
+from app.vercel_oauth import authorization_url as vercel_authorization_url,exchange_code as vercel_exchange_code,read_state as vercel_read_state,current_user as vercel_current_user,list_projects as vercel_list_projects
 from app.adsense import AdSense
 import json
 app=FastAPI(title="Autonomous Web Company",version="5.6")
@@ -35,7 +36,7 @@ async def root():return {"service":"Autonomous Web Company Brain","status":"onli
 @app.get("/api/status")
 async def status():
  from app.config import settings
- s=settings();return {"status":"online","dry_run":s.AUTONOMY_DRY_RUN,"provisioning_enabled":s.PROVISIONING_ENABLED,"integrations":{"gsc":bool(s.GOOGLE_APPLICATION_CREDENTIALS and s.GSC_SITE_URL),"ga4":bool(s.GA4_PROPERTY_ID),"github":bool(s.GITHUB_TOKEN and s.GITHUB_OWNER),"vercel":bool(s.VERCEL_TOKEN),"domain_binding":bool(s.VERCEL_TOKEN and s.ALLOW_DOMAIN_BINDING)},"scheduler_hours":s.SCHEDULER_HOURS}
+ s=settings();return {"status":"online","dry_run":s.AUTONOMY_DRY_RUN,"provisioning_enabled":s.PROVISIONING_ENABLED,"integrations":{"gsc":bool(s.GOOGLE_APPLICATION_CREDENTIALS and s.GSC_SITE_URL),"ga4":bool(s.GA4_PROPERTY_ID),"github":bool(s.GITHUB_TOKEN and s.GITHUB_OWNER),"vercel":bool(s.VERCEL_TOKEN or (s.VERCEL_CLIENT_ID and s.VERCEL_CLIENT_SECRET)),"domain_binding":bool((s.VERCEL_TOKEN or s.VERCEL_CLIENT_ID) and s.ALLOW_DOMAIN_BINDING)},"scheduler_hours":s.SCHEDULER_HOURS}
 @app.post("/api/projects")
 async def create(p:ProjectIn,s:AsyncSession=Depends(db)):
  x=Project(**p.model_dump());s.add(x);await s.commit();await s.refresh(x);return {"id":x.id,"name":x.name,"domain":x.domain,"dry_run":x.dry_run,"active":x.active}
@@ -56,7 +57,7 @@ async def project_settings(pid:int,s:AsyncSession=Depends(db)):
  employees=(await s.execute(select(Employee).where(Employee.project_id==pid).order_by(Employee.id))).scalars().all()
  models=(await s.execute(select(AIModel).where(AIModel.project_id==pid).order_by(AIModel.id))).scalars().all()
  from app.config import settings
- cfg=settings();google_connected="google_oauth" in providers;github_connected="github_oauth" in providers;vercel_connected=bool(cfg.VERCEL_TOKEN)
+ cfg=settings();google_connected="google_oauth" in providers;github_connected="github_oauth" in providers;vercel_connected="vercel_oauth" in providers or bool(cfg.VERCEL_TOKEN)
  return {"project":{"id":p.id,"name":p.name,"domain":p.domain,"repo":p.repo,"branch":p.branch,"goal":p.goal,"language":p.language,"dry_run":p.dry_run,"active":p.active},"connections":{"google":{"connected":google_connected,"search_console":google_connected,"analytics":google_connected,"adsense":google_connected},"google_oauth":google_connected,"gsc":google_connected,"ga4":google_connected,"adsense":google_connected,"github":github_connected,"vercel":vercel_connected},"employees":[{"id":x.id,"name":x.name,"role":x.role,"agent":x.agent,"instructions":x.instructions,"objectives":x.objectives or [],"tools":x.tools or [],"permissions":x.permissions or [],"model_id":x.model_id,"autonomy_level":x.autonomy_level,"active":x.active} for x in employees],"models":[{"id":x.id,"provider":x.provider,"model":x.model,"purpose":x.purpose,"active":x.active} for x in models]}
 @app.post("/api/projects/{pid}/secrets")
 async def secret(pid:int,p:SecretIn,s:AsyncSession=Depends(db)):
@@ -174,6 +175,53 @@ async def github_connection(pid:int,s:AsyncSession=Depends(db)):
 @app.delete("/api/projects/{pid}/github")
 async def github_disconnect(pid:int,s:AsyncSession=Depends(db)):
  x=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider=="github_oauth"))
+ if x:await s.delete(x);await s.commit()
+ return {"connected":False}
+@app.get("/api/projects/{pid}/vercel/oauth/start")
+async def vercel_oauth_start(pid:int,s:AsyncSession=Depends(db)):
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+ try:return RedirectResponse(vercel_authorization_url(pid),status_code=302)
+ except ValueError as e:raise HTTPException(503,detail=str(e))
+ except Exception as e:raise HTTPException(500,detail=f"vercel_oauth_start_failed:{e}")
+@app.get("/api/vercel/oauth/callback")
+async def vercel_oauth_callback(code:str|None=None,state:str|None=None,error:str|None=None,teamId:str|None=None,configurationId:str|None=None,next:str|None=None,s:AsyncSession=Depends(db)):
+ from app.config import settings
+ dashboard=settings().DASHBOARD_URL.rstrip("/")
+ if error:return RedirectResponse(f"{dashboard}/settings?tab=vercel&vercel=denied",status_code=302)
+ if not code or not state:return RedirectResponse(f"{dashboard}/settings?tab=vercel&vercel=error",status_code=302)
+ try:
+  payload=vercel_read_state(state);pid=int(payload.get("pid"))
+  if not await s.scalar(select(Project).where(Project.id==pid)):raise ValueError("project_not_found")
+  token=await vercel_exchange_code(code)
+  access=token.get("access_token")
+  if not access:raise ValueError("vercel_access_token_missing")
+  profile=await vercel_current_user(access)
+  resolved_team=token.get("team_id") or teamId
+  resolved_configuration=token.get("configuration_id") or configurationId
+  value=json.dumps({"access_token":access,"token":token,"profile":profile,"team_id":resolved_team,"configuration_id":resolved_configuration},separators=(",",":"))
+  old=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider=="vercel_oauth"))
+  if old:old.ciphertext=encrypt(value)
+  else:s.add(Secret(project_id=pid,provider="vercel_oauth",ciphertext=encrypt(value)))
+  await s.commit()
+  return RedirectResponse(f"{dashboard}/settings?tab=vercel&vercel=connected",status_code=302)
+ except Exception:
+  await s.rollback()
+  return RedirectResponse(f"{dashboard}/settings?tab=vercel&vercel=error",status_code=302)
+@app.get("/api/projects/{pid}/vercel")
+async def vercel_connection(pid:int,s:AsyncSession=Depends(db)):
+ if not await s.scalar(select(Project).where(Project.id==pid)):raise HTTPException(404,"project_not_found")
+ stored=await secret_map(pid,s);data=stored.get("vercel_oauth") or {}
+ token=data.get("access_token") if isinstance(data,dict) else None
+ if not token:return {"connected":False}
+ profile=data.get("profile",{}) if isinstance(data,dict) else {}
+ team_id=data.get("team_id") if isinstance(data,dict) else None
+ configuration_id=data.get("configuration_id") if isinstance(data,dict) else None
+ try:projects=await vercel_list_projects(token,team_id)
+ except Exception as e:return {"connected":True,"profile":profile,"team_id":team_id,"configuration_id":configuration_id,"projects":[],"error":str(e)[:300]}
+ return {"connected":True,"profile":profile,"team_id":team_id,"configuration_id":configuration_id,"projects":[{"id":x.get("id"),"name":x.get("name"),"framework":x.get("framework"),"url":x.get("targets",{}).get("production",{}).get("url") if isinstance(x.get("targets"),dict) else None} for x in projects]}
+@app.delete("/api/projects/{pid}/vercel")
+async def vercel_disconnect(pid:int,s:AsyncSession=Depends(db)):
+ x=await s.scalar(select(Secret).where(Secret.project_id==pid,Secret.provider=="vercel_oauth"))
  if x:await s.delete(x);await s.commit()
  return {"connected":False}
 @app.get("/api/projects/{pid}/adsense")
