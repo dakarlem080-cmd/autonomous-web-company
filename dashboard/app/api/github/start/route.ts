@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "project_id_required" }, { status: 400 });
   }
 
-  // GitHub OAuth credentials live only in the Railway backend.
-  // The browser must never require GITHUB_CLIENT_ID/SECRET in Vercel.
-  return NextResponse.redirect(`${API}/api/projects/${projectId}/github/oauth/start`);
+  // OAuth credentials belong only to Railway. Vercel is a redirect proxy.
+  const target = new URL(`${API}/api/projects/${projectId}/github/oauth/start`);
+  return NextResponse.redirect(target, { status: 307 });
 }
