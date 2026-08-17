@@ -28,7 +28,6 @@ jobs:
         run: |
           python - <<'PY'
           import py_compile
-          import sys
           from pathlib import Path
 
           failures = 0
@@ -43,8 +42,41 @@ jobs:
           PY
       - name: Ruff changed Python files
         run: |
-          files=$(git diff --name-only origin/main...HEAD -- '*.py' | sed 's#^backend/##' | tr '\n' ' ')
-          [ -z "$files" ] || ruff check $files
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          files = [
+              path
+              for path in subprocess.check_output(
+                  ["git", "diff", "--name-only", "origin/main...HEAD", "--", "*.py"],
+                  text=True,
+              ).splitlines()
+              if path.startswith("backend/")
+          ]
+          files = [str(Path(path).relative_to("backend")) for path in files]
+          if not files:
+              raise SystemExit(0)
+          result = subprocess.run(
+              ["ruff", "check", "--output-format", "json", *files],
+              text=True,
+              capture_output=True,
+          )
+          try:
+              diagnostics = json.loads(result.stdout or "[]")
+          except json.JSONDecodeError:
+              print(result.stdout)
+              print(result.stderr)
+              raise SystemExit(result.returncode)
+          for item in diagnostics:
+              location = item.get("location") or {}
+              message = item.get("message", "Ruff violation").replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+              path = item.get("filename", "backend")
+              line = location.get("row", 1)
+              print(f"::error file=backend/{path},line={line}::{message}")
+          raise SystemExit(result.returncode)
+          PY
       - run: pytest -q
       - name: Type check changed files
         run: |
